@@ -45,6 +45,18 @@ function clampCenterToGrid(handlerC, targetC, maxUnits) {
   return { x: handlerC.x + dx * best, y: handlerC.y + dy * best };
 }
 
+/** Safe HTML-escape helper (fallback for missing Foundry util) */
+function escapeHtml(str) {
+  if (str == null) return "";
+  // Use Handlebars if available (Foundry provides Handlebars), otherwise DOM method
+  try {
+    if (typeof Handlebars?.escapeExpression === "function") return Handlebars.escapeExpression(String(str));
+  } catch {}
+  const div = document.createElement("div");
+  div.appendChild(document.createTextNode(String(str)));
+  return div.innerHTML;
+}
+
 /* ---------- Safe Flag Helpers & API ---------- */
 
 function getLeashFlag(doc) {
@@ -205,7 +217,7 @@ function openLeashDialog(targetDoc) {
 
   if (handlerOptions.length === 0) return ui.notifications.warn("No other tokens on the scene to leash to.");
 
-  const optionsHtml = handlerOptions.map(o => `<option value="${o.id}">${foundry.utils.escapeHTML(o.name)}</option>`).join("");
+  const optionsHtml = handlerOptions.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("");
   const unitsName = canvas.scene.grid.units || "units";
   const content = `
     <form class="${MODULE_ID}-form">
