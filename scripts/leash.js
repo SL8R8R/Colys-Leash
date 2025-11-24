@@ -48,7 +48,6 @@ function clampCenterToGrid(handlerC, targetC, maxUnits) {
 /** Safe HTML-escape helper (fallback for missing Foundry util) */
 function escapeHtml(str) {
   if (str == null) return "";
-  // Use Handlebars if available (Foundry provides Handlebars), otherwise DOM method
   try {
     if (typeof Handlebars?.escapeExpression === "function") return Handlebars.escapeExpression(String(str));
   } catch {}
@@ -68,7 +67,6 @@ async function setLeashFlag(doc, value) {
 async function unsetLeashFlag(doc) {
   try { return await doc.unsetFlag(MODULE_ID, "leash"); } catch (e) { console.warn(`${MODULE_ID} | unsetFlag failed`, e); }
 }
-
 // Safe getter for arbitrary legacy scope without throwing
 function safeScopeGetFlag(scope, doc, key) {
   try { return doc?.getFlag(scope, key); } catch (e) { return undefined; }
