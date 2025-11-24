@@ -1,6 +1,6 @@
 {
   "id": "colys-leash",
-  "title": "Leash Tokens",
+  "title": "Colys Leash",
   "description": "Leash a token to a handler with adjustable distance; grid-based measurement, handler pull, and visual ring.",
   "version": "1.2.0",
   "manifest": "https://raw.githubusercontent.com/SL8R8R/Colys-Leash/main/module.json",
