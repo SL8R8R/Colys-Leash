@@ -387,62 +387,70 @@ function updateRingPosition(handlerId, targetId, handlerCenter, distance) {
 /* ---------- Hover / Control Hooks for Rings ---------- */
 
 Hooks.on("hoverToken", (token, hovered) => {
-  let vis = "hover";
-  try { vis = game.settings.get(MODULE_ID, "ringVisibility"); } catch {}
-  if (vis === "never") return;
+  try {
+    let vis = "hover";
+    try { vis = game.settings.get(MODULE_ID, "ringVisibility"); } catch {}
+    if (vis === "never") return;
 
-  const tokenDoc = token?.document;
-  if (!tokenDoc) return;
-  if (vis === "always") return;
+    const tokenDoc = token?.document;
+    if (!tokenDoc) return;
+    if (vis === "always") return;
 
-  const scene = tokenDoc.parent;
-  if (!scene) return;
+    const scene = tokenDoc.parent;
+    if (!scene) return;
 
-  if (!hovered) {
+    if (!hovered) {
+      for (const td of scene.tokens) {
+        const leash = getLeashFlag(td);
+        if (!leash) continue;
+        if (leash.handlerId === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
+        if (tokenDoc.id === td.id && leash) removeRingForPair(leash.handlerId, td.id);
+      }
+      return;
+    }
+
     for (const td of scene.tokens) {
       const leash = getLeashFlag(td);
       if (!leash) continue;
-      if (leash.handlerId === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
-      if (tokenDoc.id === td.id && leash) removeRingForPair(leash.handlerId, td.id);
+      const handlerDoc = scene.tokens.get(leash.handlerId);
+      if (!handlerDoc) continue;
+      if (tokenDoc.id === leash.handlerId || tokenDoc.id === td.id) showRingForPair(handlerDoc, td, leash.distance);
     }
-    return;
-  }
-
-  for (const td of scene.tokens) {
-    const leash = getLeashFlag(td);
-    if (!leash) continue;
-    const handlerDoc = scene.tokens.get(leash.handlerId);
-    if (!handlerDoc) continue;
-    if (tokenDoc.id === leash.handlerId || tokenDoc.id === td.id) showRingForPair(handlerDoc, td, leash.distance);
+  } catch (err) {
+    console.warn(`${MODULE_ID} | hoverToken handler error (caught)`, err);
   }
 });
 
 Hooks.on("controlToken", (token, controlled) => {
-  let vis = "hover";
-  try { vis = game.settings.get(MODULE_ID, "ringVisibility"); } catch {}
-  if (vis === "never") return;
+  try {
+    let vis = "hover";
+    try { vis = game.settings.get(MODULE_ID, "ringVisibility"); } catch {}
+    if (vis === "never") return;
 
-  const tokenDoc = token?.document;
-  if (!tokenDoc) return;
+    const tokenDoc = token?.document;
+    if (!tokenDoc) return;
 
-  const scene = tokenDoc.parent;
-  if (!scene) return;
+    const scene = tokenDoc.parent;
+    if (!scene) return;
 
-  if (!controlled && vis !== "always") {
+    if (!controlled && vis !== "always") {
+      for (const td of scene.tokens) {
+        const leash = getLeashFlag(td);
+        if (!leash) continue;
+        removeRingForPair(leash.handlerId, td.id);
+      }
+      return;
+    }
+
     for (const td of scene.tokens) {
       const leash = getLeashFlag(td);
       if (!leash) continue;
-      removeRingForPair(leash.handlerId, td.id);
+      const handlerDoc = scene.tokens.get(leash.handlerId);
+      if (!handlerDoc) continue;
+      if (tokenDoc.id === leash.handlerId || tokenDoc.id === td.id || vis === "always") showRingForPair(handlerDoc, td, leash.distance);
     }
-    return;
-  }
-
-  for (const td of scene.tokens) {
-    const leash = getLeashFlag(td);
-    if (!leash) continue;
-    const handlerDoc = scene.tokens.get(leash.handlerId);
-    if (!handlerDoc) continue;
-    if (tokenDoc.id === leash.handlerId || tokenDoc.id === td.id || vis === "always") showRingForPair(handlerDoc, td, leash.distance);
+  } catch (err) {
+    console.warn(`${MODULE_ID} | controlToken handler error (caught)`, err);
   }
 });
 
