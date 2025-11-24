@@ -5,14 +5,12 @@ console.log(`${MODULE_ID} | leash.js loaded`, { user: game?.user?.id ?? null });
 
 /* ---------- Utilities ---------- */
 
-/** Convert scene units to pixels */
 function unitsToPixels(units) {
   const dims = canvas?.dimensions;
   if (!dims) return 0;
   return (units / dims.distance) * dims.size;
 }
 
-/** Get center (in pixels) for a TokenDocument's proposed top-left x,y */
 function centerFromTopLeft(tokenDoc, x, y) {
   const sizePx = canvas?.dimensions?.size ?? 100;
   const wPx = (tokenDoc.width ?? 1) * sizePx;
@@ -20,29 +18,21 @@ function centerFromTopLeft(tokenDoc, x, y) {
   return { x: x + wPx / 2, y: y + hPx / 2, wPx, hPx };
 }
 
-/** Current center from a TokenDocument as placed */
 function documentCenterPx(tokenDoc) {
   return centerFromTopLeft(tokenDoc, tokenDoc.x ?? 0, tokenDoc.y ?? 0);
 }
 
-/** Grid-based distance (scene units) between two pixel points */
 function gridDistanceUnits(p1, p2) {
   if (!canvas?.grid?.measureDistance) return 0;
   return canvas.grid.measureDistance(p1, p2);
 }
 
-/**
- * Clamp target center to be at most maxUnits from handler center, using grid-based measurement.
- * Returns a new {x,y} center that lies on the segment from handler->target, within grid distance.
- * Binary searches along the ray to respect grid diagonal rules.
- */
 function clampCenterToGrid(handlerC, targetC, maxUnits) {
   const currentUnits = gridDistanceUnits(handlerC, targetC);
   if (currentUnits <= maxUnits) return { x: targetC.x, y: targetC.y };
   const dx = targetC.x - handlerC.x;
   const dy = targetC.y - handlerC.y;
-  const len = Math.hypot(dx, dy);
-  if (len < 1e-6) return { x: handlerC.x, y: handlerC.y };
+  if (Math.hypot(dx, dy) < 1e-6) return { x: handlerC.x, y: handlerC.y };
 
   let lo = 0, hi = 1, best = 0;
   for (let i = 0; i < 24; i++) {
@@ -57,7 +47,6 @@ function clampCenterToGrid(handlerC, targetC, maxUnits) {
 
 /* ---------- Safe Flag Helpers & API ---------- */
 
-// Safe flag access helper (prevents "Flag scope ... not valid" exceptions)
 function getLeashFlag(doc) {
   try { return doc?.getFlag(MODULE_ID, "leash"); } catch (e) { return undefined; }
 }
@@ -66,6 +55,11 @@ async function setLeashFlag(doc, value) {
 }
 async function unsetLeashFlag(doc) {
   try { return await doc.unsetFlag(MODULE_ID, "leash"); } catch (e) { console.warn(`${MODULE_ID} | unsetFlag failed`, e); }
+}
+
+// Safe getter for arbitrary legacy scope without throwing
+function safeScopeGetFlag(scope, doc, key) {
+  try { return doc?.getFlag(scope, key); } catch (e) { return undefined; }
 }
 
 /* ---------- Settings ---------- */
@@ -121,9 +115,10 @@ Hooks.once("init", () => {
   });
 });
 
-// Expose API and migrate legacy flags after Foundry is ready
+/* ---------- Ready: API + Legacy Migration ---------- */
 Hooks.once("ready", async () => {
   console.log(`${MODULE_ID} | Ready`);
+
   const mod = game.modules.get(MODULE_ID);
   if (mod) {
     mod.api = {
@@ -136,21 +131,21 @@ Hooks.once("ready", async () => {
     console.warn(`${MODULE_ID} | Could not find module entry to attach API`);
   }
 
-  // Migrate legacy flags saved under "sl8r-leash"
-  const legacyScope = "colys-leash";
+  // Migrate legacy flags saved under "sl8r-leash" safely
+  const legacyScope = "sl8r-leash";
   if (legacyScope !== MODULE_ID) {
     let migrated = 0;
     try {
       for (const scene of game.scenes) {
         for (const tokenDoc of scene.tokens) {
           try {
-            const legacy = tokenDoc.getFlag(legacyScope, "leash");
+            const legacy = safeScopeGetFlag(legacyScope, tokenDoc, "leash");
             if (legacy !== undefined) {
               await tokenDoc.setFlag(MODULE_ID, "leash", legacy);
-              await tokenDoc.unsetFlag(legacyScope, "leash");
+              try { await tokenDoc.unsetFlag(legacyScope, "leash"); } catch {}
               migrated++;
             }
-          } catch {}
+          } catch (e) { /* ignore per-token errors */ }
         }
       }
     } catch (e) { /* ignore */ }
@@ -161,8 +156,8 @@ Hooks.once("ready", async () => {
 /* ---------- HUD: Leash / Unleash ---------- */
 Hooks.on("renderTokenHUD", (hud, html) => {
   console.debug(`${MODULE_ID} | renderTokenHUD start`, {
-    userIsGM: game.user.isGM,
-    gmOnly: (() => { try { return game.settings.get(MODULE_ID, "gmOnly"); } catch { return undefined; } })(),
+    userIsGM: game.user?.isGM,
+    gmOnly: (() => { try { return game.settings.get(MODULE_ID, "gmOnly"); } catch { return true; } })(),
     hudExists: !!hud,
     htmlExists: !!html
   });
@@ -174,16 +169,11 @@ Hooks.on("renderTokenHUD", (hud, html) => {
   try { gmOnly = game.settings.get(MODULE_ID, "gmOnly"); } catch (e) { gmOnly = true; }
   if (gmOnly && !game.user.isGM) return;
 
-  // Try several fallbacks for where to insert the control icon
   let container = html.find(".left");
   if (!container || container.length === 0) container = html.find(".token-control.left");
   if (!container || container.length === 0) container = html;
 
-  try {
-    if (container === html) {
-      console.warn(`${MODULE_ID} | Using fallback container (HUD root). HUD snapshot:`, html.prop?.("outerHTML")?.slice?.(0,300));
-    }
-  } catch (e) { console.warn(`${MODULE_ID} | could not snapshot HUD html`, e); }
+  try { if (container === html) console.warn(`${MODULE_ID} | Using fallback container (HUD root).`); } catch {}
 
   const leashData = getLeashFlag(tokenDoc);
 
@@ -205,10 +195,10 @@ Hooks.on("renderTokenHUD", (hud, html) => {
   }
 });
 
-/** Dialog to choose handler and distance */
+/* ---------- Dialog ---------- */
 function openLeashDialog(targetDoc) {
-  const defaultDistance = game.settings.get(MODULE_ID, "defaultDistance");
-
+  let defaultDistance = 5;
+  try { defaultDistance = game.settings.get(MODULE_ID, "defaultDistance"); } catch {}
   const handlerOptions = canvas.tokens.placeables
     .filter(t => t.document.id !== targetDoc.id)
     .map(t => ({ id: t.document.id, name: t.document.name || t.document.actor?.name || t.id }));
@@ -225,7 +215,7 @@ function openLeashDialog(targetDoc) {
       </div>
       <div class="form-group">
         <label>Leash Distance (${unitsName})</label>
-        <input type="number" name="distance" min="0" step="5" value="${defaultDistance}">
+        <input type="number" name="distance" min="0" step="1" value="${defaultDistance}">
       </div>
     </form>
   `;
@@ -247,7 +237,7 @@ function openLeashDialog(targetDoc) {
 
           await setLeashFlag(targetDoc, { handlerId: handlerDoc.id, sceneId: scene.id, distance });
           ui.notifications.info(`Leashed ${targetDoc.name ?? "Token"} to ${handlerDoc.name ?? "Handler"} at ${distance} ${unitsName}.`);
-          if (game.settings.get(MODULE_ID, "ringVisibility") === "always") showRingForPair(handlerDoc, targetDoc, distance);
+          try { if (game.settings.get(MODULE_ID, "ringVisibility") === "always") showRingForPair(handlerDoc, targetDoc, distance); } catch {}
         }
       },
       cancel: { label: "Cancel" }
@@ -278,7 +268,8 @@ Hooks.on("preUpdateToken", (tokenDoc, update) => {
 
   if (distUnits <= maxUnits) return;
 
-  const behavior = game.settings.get(MODULE_ID, "exceedBehavior");
+  let behavior = "block";
+  try { behavior = game.settings.get(MODULE_ID, "exceedBehavior"); } catch {}
   const unitsName = canvas.scene.grid.units || "units";
   if (behavior === "block") {
     ui.notifications.warn(`${tokenDoc.name ?? "Token"} is leashed: cannot move more than ${maxUnits} ${unitsName} from handler.`);
@@ -293,7 +284,6 @@ Hooks.on("preUpdateToken", (tokenDoc, update) => {
 
 /* ---------- Handler Auto-Pull ---------- */
 
-// Track deltas during preUpdate to use after the handler completes movement
 const _lastDelta = new Map();
 
 Hooks.on("preUpdateToken", (tokenDoc, update) => {
@@ -324,7 +314,8 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
     const unitsName = canvas.scene.grid.units || "units";
 
     let proposedCenter;
-    const mode = game.settings.get(MODULE_ID, "handlerPullMode");
+    let mode = "drag";
+    try { mode = game.settings.get(MODULE_ID, "handlerPullMode"); } catch {}
     if (mode === "drag") {
       proposedCenter = { x: targetCNow.x + delta.dx, y: targetCNow.y + delta.dy };
     } else {
@@ -350,7 +341,8 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
 
 /* ---------- Visual Leash Rings ---------- */
 
-const _rings = new Map(); // key: `${handlerId}:${targetId}` -> PIXI.Graphics
+const _rings = new Map();
+
 function ringKey(handlerId, targetId) { return `${handlerId}:${targetId}`; }
 
 function showRingForPair(handlerDoc, targetDoc, distance) {
@@ -395,7 +387,8 @@ function updateRingPosition(handlerId, targetId, handlerCenter, distance) {
 /* ---------- Hover / Control Hooks for Rings ---------- */
 
 Hooks.on("hoverToken", (token, hovered) => {
-  const vis = (() => { try { return game.settings.get(MODULE_ID, "ringVisibility"); } catch { return "hover"; } })();
+  let vis = "hover";
+  try { vis = game.settings.get(MODULE_ID, "ringVisibility"); } catch {}
   if (vis === "never") return;
 
   const tokenDoc = token?.document;
@@ -403,10 +396,13 @@ Hooks.on("hoverToken", (token, hovered) => {
   if (vis === "always") return;
 
   const scene = tokenDoc.parent;
+  if (!scene) return;
+
   if (!hovered) {
     for (const td of scene.tokens) {
       const leash = getLeashFlag(td);
-      if (leash?.handlerId === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
+      if (!leash) continue;
+      if (leash.handlerId === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
       if (tokenDoc.id === td.id && leash) removeRingForPair(leash.handlerId, td.id);
     }
     return;
@@ -422,13 +418,16 @@ Hooks.on("hoverToken", (token, hovered) => {
 });
 
 Hooks.on("controlToken", (token, controlled) => {
-  const vis = (() => { try { return game.settings.get(MODULE_ID, "ringVisibility"); } catch { return "hover"; } })();
+  let vis = "hover";
+  try { vis = game.settings.get(MODULE_ID, "ringVisibility"); } catch {}
   if (vis === "never") return;
 
   const tokenDoc = token?.document;
   if (!tokenDoc) return;
 
   const scene = tokenDoc.parent;
+  if (!scene) return;
+
   if (!controlled && vis !== "always") {
     for (const td of scene.tokens) {
       const leash = getLeashFlag(td);
@@ -451,6 +450,7 @@ Hooks.on("controlToken", (token, controlled) => {
 Hooks.on("canvasReady", () => { for (const [, gfx] of _rings) { try { gfx.destroy(true); } catch {} } _rings.clear(); });
 Hooks.on("deleteToken", (tokenDoc) => {
   const scene = tokenDoc.parent;
+  if (!scene) return;
   for (const td of scene.tokens) {
     const leash = getLeashFlag(td);
     if (!leash) continue;
