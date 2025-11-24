@@ -1,4 +1,4 @@
-const MODULE_ID = "sl8r-leash";
+const MODULE_ID = "colys-leash";
 
 /* ---------- Utilities ---------- */
 
