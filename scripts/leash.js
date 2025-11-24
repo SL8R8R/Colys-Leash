@@ -135,13 +135,13 @@ Hooks.on("renderTokenHUD", (hud, html) => {
 
   if (!leashData) {
     const btn = $(
-      `<div class="control-icon" data-action="sl8r-leash" title="Leash"><i class="fas fa-link"></i></div>`
+      `<div class="control-icon" data-action="colys-leash" title="Leash"><i class="fas fa-link"></i></div>`
     );
     btn.on("click", () => openLeashDialog(tokenDoc));
     left.append(btn);
   } else {
     const btn = $(
-      `<div class="control-icon" data-action="sl8r-unleash" title="Unleash"><i class="fas fa-unlink"></i></div>`
+      `<div class="control-icon" data-action="colys-unleash" title="Unleash"><i class="fas fa-unlink"></i></div>`
     );
     btn.on("click", async () => {
       await tokenDoc.unsetFlag(MODULE_ID, "leash");
