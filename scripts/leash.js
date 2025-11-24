@@ -124,13 +124,28 @@ Hooks.once("init", () => {
 
 /* ---------- HUD: Leash / Unleash ---------- */
 Hooks.on("renderTokenHUD", (hud, html) => {
+  console.debug(`${MODULE_ID} | renderTokenHUD`, {
+    userIsGM: game.user.isGM,
+    gmOnly: game.settings.get(MODULE_ID, "gmOnly"),
+    hudExists: !!hud,
+    htmlExists: !!html
+  });
+
   const tokenDoc = hud?.object?.document;
   if (!tokenDoc) return;
 
   const gmOnly = game.settings.get(MODULE_ID, "gmOnly");
-  if (gmOnly && !game.user.isGM) return;
+  if (gmOnly && !game.user.isGM) {
+    console.debug(`${MODULE_ID} | HUD buttons hidden: gmOnly setting prevents non-GMs from seeing them`);
+    return;
+  }
 
   const left = html.find(".left");
+  if (!left || left.length === 0) {
+    console.warn(`${MODULE_ID} | token HUD .left element not found; DOM snapshot:`, html.prop?.("outerHTML")?.slice?.(0,200));
+    return;
+  }
+
   const leashData = tokenDoc.getFlag(MODULE_ID, "leash");
 
   if (!leashData) {
