@@ -1,0 +1,3 @@
+/* Token HUD styling */
+.control-icon[data-action="sl8r-leash"] i { color: #4caf50; }
+.control-icon[data-action="sl8r-unleash"] i { color: #f44336; }
