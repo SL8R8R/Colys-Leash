@@ -28,21 +28,33 @@ function gridDistanceUnits(p1, p2) {
 }
 
 function clampCenterToGrid(handlerC, targetC, maxUnits) {
-  const currentUnits = gridDistanceUnits(handlerC, targetC);
-  if (currentUnits <= maxUnits) return { x: targetC.x, y: targetC.y };
-  const dx = targetC.x - handlerC.x;
-  const dy = targetC.y - handlerC.y;
-  if (Math.hypot(dx, dy) < 1e-6) return { x: handlerC.x, y: handlerC.y };
+  // Use pixel-based clamping for stability on large moves.
+  try {
+    const radiusPx = unitsToPixels(maxUnits);
+    const dx = targetC.x - handlerC.x;
+    const dy = targetC.y - handlerC.y;
+    const distPx = Math.hypot(dx, dy);
+    if (distPx <= radiusPx || distPx < 1e-6) return { x: targetC.x, y: targetC.y };
+    const t = radiusPx / distPx;
+    return { x: handlerC.x + dx * t, y: handlerC.y + dy * t };
+  } catch (err) {
+    // Fallback to original behavior using grid units if anything goes wrong
+    const currentUnits = gridDistanceUnits(handlerC, targetC);
+    if (currentUnits <= maxUnits) return { x: targetC.x, y: targetC.y };
+    const dx = targetC.x - handlerC.x;
+    const dy = targetC.y - handlerC.y;
+    if (Math.hypot(dx, dy) < 1e-6) return { x: handlerC.x, y: handlerC.y };
 
-  let lo = 0, hi = 1, best = 0;
-  for (let i = 0; i < 24; i++) {
-    const mid = (lo + hi) / 2;
-    const mx = handlerC.x + dx * mid;
-    const my = handlerC.y + dy * mid;
-    const d = gridDistanceUnits(handlerC, { x: mx, y: my });
-    if (d <= maxUnits) { best = mid; lo = mid; } else { hi = mid; }
+    let lo = 0, hi = 1, best = 0;
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      const mx = handlerC.x + dx * mid;
+      const my = handlerC.y + dy * mid;
+      const d = gridDistanceUnits(handlerC, { x: mx, y: my });
+      if (d <= maxUnits) { best = mid; lo = mid; } else { hi = mid; }
+    }
+    return { x: handlerC.x + dx * best, y: handlerC.y + dy * best };
   }
-  return { x: handlerC.x + dx * best, y: handlerC.y + dy * best };
 }
 
 /** Safe HTML-escape helper (fallback for missing Foundry util) */
