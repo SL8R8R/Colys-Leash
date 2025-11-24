@@ -124,7 +124,7 @@ Hooks.once("init", () => {
 
 /* ---------- HUD: Leash / Unleash ---------- */
 Hooks.on("renderTokenHUD", (hud, html) => {
-  console.debug(`${MODULE_ID} | renderTokenHUD`, {
+  console.debug(`${MODULE_ID} | renderTokenHUD start`, {
     userIsGM: game.user.isGM,
     gmOnly: game.settings.get(MODULE_ID, "gmOnly"),
     hudExists: !!hud,
@@ -132,18 +132,34 @@ Hooks.on("renderTokenHUD", (hud, html) => {
   });
 
   const tokenDoc = hud?.object?.document;
-  if (!tokenDoc) return;
-
-  const gmOnly = game.settings.get(MODULE_ID, "gmOnly");
-  if (gmOnly && !game.user.isGM) {
-    console.debug(`${MODULE_ID} | HUD buttons hidden: gmOnly setting prevents non-GMs from seeing them`);
+  if (!tokenDoc) {
+    console.debug(`${MODULE_ID} | no tokenDoc on HUD`);
     return;
   }
 
-  const left = html.find(".left");
-  if (!left || left.length === 0) {
-    console.warn(`${MODULE_ID} | token HUD .left element not found; DOM snapshot:`, html.prop?.("outerHTML")?.slice?.(0,200));
+  const gmOnly = game.settings.get(MODULE_ID, "gmOnly");
+  if (gmOnly && !game.user.isGM) {
+    console.debug(`${MODULE_ID} | gmOnly enabled; hiding HUD button for non-GM`);
     return;
+  }
+
+  // Try several fallbacks for where to insert the control icon
+  let container = html.find(".left");
+  if (!container || container.length === 0) {
+    container = html.find(".token-control.left");
+  }
+  if (!container || container.length === 0) {
+    // As a last resort append to the HUD root so the icon will still be visible somewhere
+    container = html;
+  }
+
+  // Sanity snapshot if things look unexpected
+  try {
+    if (container === html) {
+      console.warn(`${MODULE_ID} | Using fallback container (HUD root). HUD HTML snapshot:`, html.prop?.("outerHTML")?.slice?.(0,300));
+    }
+  } catch (e) {
+    console.warn(`${MODULE_ID} | could not snapshot HUD html`, e);
   }
 
   const leashData = tokenDoc.getFlag(MODULE_ID, "leash");
@@ -152,18 +168,24 @@ Hooks.on("renderTokenHUD", (hud, html) => {
     const btn = $(
       `<div class="control-icon" data-action="colys-leash" title="Leash"><i class="fas fa-link"></i></div>`
     );
-    btn.on("click", () => openLeashDialog(tokenDoc));
-    left.append(btn);
+    btn.on("click", (ev) => {
+      ev.stopPropagation?.();
+      openLeashDialog(tokenDoc);
+    });
+    container.append(btn);
+    console.debug(`${MODULE_ID} | appended Leash button`, { tokenId: tokenDoc.id });
   } else {
     const btn = $(
       `<div class="control-icon" data-action="colys-unleash" title="Unleash"><i class="fas fa-unlink"></i></div>`
     );
-    btn.on("click", async () => {
+    btn.on("click", async (ev) => {
+      ev.stopPropagation?.();
       await tokenDoc.unsetFlag(MODULE_ID, "leash");
       removeRingForPair(leashData.handlerId, tokenDoc.id);
       ui.notifications.info(`Unleashed ${tokenDoc.name ?? "Token"}.`);
     });
-    left.append(btn);
+    container.append(btn);
+    console.debug(`${MODULE_ID} | appended Unleash button`, { tokenId: tokenDoc.id });
   }
 });
 
