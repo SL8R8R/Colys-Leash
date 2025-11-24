@@ -137,7 +137,7 @@ Hooks.once("ready", async () => {
   }
 
   // Migrate legacy flags saved under "sl8r-leash"
-  const legacyScope = "sl8r-leash";
+  const legacyScope = "colys-leash";
   if (legacyScope !== MODULE_ID) {
     let migrated = 0;
     try {
