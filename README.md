@@ -1,6 +1,8 @@
 
 # Colys Leash (colys-leash)
 
+This is somewhat functional, but is still a work in progress. 
+
 Leash a token to a handler with adjustable distance; grid-based measurement (PF2E square grid), handler auto-follow (Drag mode by default), and a visual leash ring.
 
 ## Install (Manual)
