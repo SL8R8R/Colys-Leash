@@ -1,10 +1,10 @@
 
-# Leash Tokens (colys-leash)
+# Colys Leash (colys-leash)
 
 Leash a token to a handler with adjustable distance; grid-based measurement (PF2E square grid), handler auto-follow (Drag mode by default), and a visual leash ring.
 
 ## Install (Manual)
-1. Download `colys-leash-v1.2.0.zip`.
+1. Download `colys-leash.zip`.
 2. Unzip into your Foundry **Data/modules** directory so it becomes `Data/modules/colys-leash/`.
 3. In Foundry: **Configuration → Manage Modules → enable “Leash Tokens.”**
 
