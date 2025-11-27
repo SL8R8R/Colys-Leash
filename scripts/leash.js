@@ -328,9 +328,7 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
 
   const handlerDoc = tokenDoc;
   const handlerCenter = documentCenterPx(handlerDoc);
-  const updates = [];
 
-  // Debug toggle
   const DEBUG = true;
 
   for (const td of scene.tokens) {
@@ -340,16 +338,13 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
     const maxUnits = leash.distance;
     const targetCNow = documentCenterPx(td);
 
-    let proposedCenter;
-    let mode = "drag";
-    try { mode = game.settings.get(MODULE_ID, "handlerPullMode"); } catch {}
-    if (mode === "drag") {
-      proposedCenter = { x: targetCNow.x + delta.dx, y: targetCNow.y + delta.dy };
-    } else {
-      proposedCenter = targetCNow;
-    }
+    // Proposed new center based on handler delta
+    let proposedCenter = {
+      x: targetCNow.x + delta.dx,
+      y: targetCNow.y + delta.dy
+    };
 
-    // Pixel-based distance and clamping
+    // Clamp to leash radius
     const radiusPx = unitsToPixels(maxUnits);
     const ddx = proposedCenter.x - handlerCenter.x;
     const ddy = proposedCenter.y - handlerCenter.y;
@@ -359,7 +354,10 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
     let clamped = false;
     if (distPx > radiusPx && distPx > 1e-6) {
       const t = radiusPx / distPx;
-      finalCenter = { x: handlerCenter.x + ddx * t, y: handlerCenter.y + ddy * t };
+      finalCenter = {
+        x: handlerCenter.x + ddx * t,
+        y: handlerCenter.y + ddy * t
+      };
       clamped = true;
     }
 
@@ -367,19 +365,30 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
       console.debug(`${MODULE_ID} | pull-clamp`, {
         handlerId: handlerDoc.id, tokenId: td.id,
         maxUnits, radiusPx, distPx,
-        delta, mode,
+        delta,
         targetCNow, proposedCenter, finalCenter
       });
     }
 
     const sizePx = canvas.dimensions.size;
-    const wPx = (td.width ?? 1) * sizePx, hPx = (td.height ?? 1) * sizePx;
-    updates.push({ _id: td.id, x: finalCenter.x - wPx / 2, y: finalCenter.y - hPx / 2 });
+    const wPx = (td.width ?? 1) * sizePx;
+    const hPx = (td.height ?? 1) * sizePx;
+
+    // Animate movement instead of instant update
+    const finalPos = {
+      x: finalCenter.x - wPx / 2,
+      y: finalCenter.y - hPx / 2
+    };
+    const tokenObj = td.object;
+    if (tokenObj) {
+      await tokenObj.animateMovement(finalPos, { duration: 250 }); // duration in ms
+    } else {
+      // fallback if object not ready
+      await td.update(finalPos);
+    }
 
     updateRingPosition(leash.handlerId, td.id, handlerCenter, maxUnits);
   }
-
-  if (updates.length) await scene.updateEmbeddedDocuments("Token", updates);
 });
 
 /* ---------- Visual Leash Rings ---------- */
