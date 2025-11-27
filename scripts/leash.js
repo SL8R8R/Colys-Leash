@@ -404,6 +404,14 @@ Hooks.once("ready", () => {
         if (sessionForHandler && sessionForHandler.startHandlerC) {
           dispX = handlerCenterNow.x - sessionForHandler.startHandlerC.x;
           dispY = handlerCenterNow.y - sessionForHandler.startHandlerC.y;
+          // If the session-derived displacement is effectively zero but a previous handler
+          // position exists (meaning the handler did move), fall back to the incremental delta
+          // and apply it to the current token center so we don't apply a stale/origin-based move.
+          if (Math.abs(dispX) < 1e-6 && Math.abs(dispY) < 1e-6 && prevHandlerPos && (prevHandlerPos.x !== handlerCenterNow.x || prevHandlerPos.y !== handlerCenterNow.y)) {
+            dispX = handlerCenterNow.x - prevHandlerPos.x;
+            dispY = handlerCenterNow.y - prevHandlerPos.y;
+            baseCenter = currentCenter;
+          }
         } else {
           dispX = handlerCenterNow.x - prevHandlerPos.x;
           dispY = handlerCenterNow.y - prevHandlerPos.y;
