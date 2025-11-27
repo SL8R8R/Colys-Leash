@@ -292,19 +292,20 @@ Hooks.once("ready", () => {
     const dy = targetCenter.y - handlerCenter.y;
     const distPx = Math.hypot(dx, dy);
 
+    // Ensure the leashed token is updated based on the handler's current position
     if (distPx <= radiusPx) return;
 
     let behavior = "block";
     try { behavior = game.settings.get(MODULE_ID, "exceedBehavior"); } catch {}
     if (behavior === "block") {
-      return false;
+        return false;
     }
 
     const t = (radiusPx / distPx) || 0;
     const clampedCenter = { x: handlerCenter.x + dx * t, y: handlerCenter.y + dy * t };
     update.x = clampedCenter.x - targetCenter.wPx / 2;
     update.y = clampedCenter.y - targetCenter.hPx / 2;
-  });
+});
 
   // Session tracking: record delta and start session for handlers
   Hooks.on("preUpdateToken", (tokenDoc, update) => {
@@ -370,9 +371,6 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
         const maxUnits = leash.distance;
         const sizePx = canvas.dimensions.size;
         const wPx = (td.width ?? 1) * sizePx, hPx = (td.height ?? 1) * sizePx;
-
-        // Use session's original center if it exists, otherwise current token center
-        const originalCenter = session?.originalCenters?.get(td.id) ?? documentCenterPx(td);
 
         // Directly set the proposed center to the handler's current position
         const proposedCenter = { x: handlerCenterNow.x, y: handlerCenterNow.y };
