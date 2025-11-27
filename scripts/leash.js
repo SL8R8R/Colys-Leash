@@ -369,18 +369,24 @@ Hooks.once("ready", () => {
       const sizePx = canvas.dimensions.size;
       const wPx = (td.width ?? 1) * sizePx, hPx = (td.height ?? 1) * sizePx;
 
+      // Use session's original center if it exists, otherwise current token center
       const originalCenter = session?.originalCenters?.get(td.id) ?? documentCenterPx(td);
 
       let proposedCenter;
       if (session && session.startHandlerC) {
+        // Drag mode: move token by same delta as handler moved from session start
         proposedCenter = {
           x: originalCenter.x + (handlerCenterNow.x - session.startHandlerC.x),
           y: originalCenter.y + (handlerCenterNow.y - session.startHandlerC.y)
         };
+      } else if (delta) {
+        // Single step: move token by same delta as handler
+        proposedCenter = { x: originalCenter.x + delta.dx, y: originalCenter.y + delta.dy };
       } else {
-        proposedCenter = { x: originalCenter.x + (delta?.dx ?? 0), y: originalCenter.y + (delta?.dy ?? 0) };
+        proposedCenter = originalCenter;
       }
 
+      // Clamp to radius
       const radiusPx = unitsToPixels(maxUnits);
       const ddx = proposedCenter.x - handlerCenterNow.x;
       const ddy = proposedCenter.y - handlerCenterNow.y;
