@@ -346,7 +346,7 @@ Hooks.once("ready", () => {
     }
   }
 
-  // Track previous handler positions
+  // Track previous handler positions (MOVED OUTSIDE updateToken hook)
   const _prevHandlerPos = new Map();
 
   Hooks.on("updateToken", async (tokenDoc, changes) => {
@@ -369,9 +369,11 @@ Hooks.once("ready", () => {
     if (!prevHandlerPos && delta) {
       // First move: calculate previous position from the delta
       prevHandlerPos = { x: handlerCenterNow.x - delta.dx, y: handlerCenterNow.y - delta.dy };
+      console.log(`${MODULE_ID} | First move - calculated prevPos from delta:`, prevHandlerPos, "delta:", delta, "currentHandlerPos:", handlerCenterNow);
     } else if (!prevHandlerPos) {
       // No delta and no previous position: use current
       prevHandlerPos = handlerCenterNow;
+      console.log(`${MODULE_ID} | No delta/prev - using current as prev:`, prevHandlerPos);
     }
     
     // Store current position for next update
@@ -394,6 +396,8 @@ Hooks.once("ready", () => {
         const handlerDx = handlerCenterNow.x - prevHandlerPos.x;
         const handlerDy = handlerCenterNow.y - prevHandlerPos.y;
         
+        console.log(`${MODULE_ID} | Handler delta: dx=${handlerDx}, dy=${handlerDy}, prevPos:`, prevHandlerPos, "currentPos:", handlerCenterNow);
+        
         const proposedCenter = { 
             x: currentCenter.x + handlerDx, 
             y: currentCenter.y + handlerDy 
@@ -410,6 +414,8 @@ Hooks.once("ready", () => {
             const t = radiusPx / distPx;
             finalCenter = { x: handlerCenterNow.x + ddx * t, y: handlerCenterNow.y + ddy * t };
         }
+
+        console.log(`${MODULE_ID} | Leashed token ${td.id}: current=${currentCenter.x},${currentCenter.y} -> proposed=${proposedCenter.x},${proposedCenter.y} -> final=${finalCenter.x},${finalCenter.y}`);
 
         updates.push({ _id: td.id, x: finalCenter.x - wPx / 2, y: finalCenter.y - hPx / 2 });
 
