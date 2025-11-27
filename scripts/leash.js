@@ -282,8 +282,10 @@ function openLeashDialog(targetDoc) {
 
 /* ---------- Movement Enforcement (Leashed token) ---------- */
 
-// Enforce per-token preUpdate movement (uses pixel clamping, silent)
-Hooks.on("preUpdateToken", (tokenDoc, update) => {
+// Enforce per-token preUpdate movement (uses pixel clamping, silent).
+// Skip enforcement for internal module updates (options.colysLeashInternal).
+Hooks.on("preUpdateToken", (tokenDoc, update, options = {}, userId) => {
+  if (options?.colysLeashInternal) return;
   if (update.x === undefined && update.y === undefined) return;
 
   const leashData = getLeashFlag(tokenDoc);
@@ -419,7 +421,10 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
     updateRingPosition(leash.handlerId, td.id, handlerCenterNow, maxUnits);
   }
 
-  if (updates.length) await scene.updateEmbeddedDocuments("Token", updates);
+  if (updates.length) {
+    // Mark these updates as internal so preUpdateToken won't block them
+    await scene.updateEmbeddedDocuments("Token", updates, { colysLeashInternal: true });
+  }
 
   clearStaleSessions(250);
 });
@@ -550,4 +555,3 @@ Hooks.on("deleteToken", (tokenDoc) => {
     if (td.id === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
   }
 });
-```// filepath:
