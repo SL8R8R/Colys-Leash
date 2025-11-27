@@ -390,13 +390,28 @@ Hooks.once("ready", () => {
         // Get current leashed token center
         const currentCenter = documentCenterPx(td);
 
-        // Move leashed token by the same delta as the handler
-        const handlerDx = handlerCenterNow.x - prevHandlerPos.x;
-        const handlerDy = handlerCenterNow.y - prevHandlerPos.y;
-               
-        const proposedCenter = { 
-            x: currentCenter.x + handlerDx, 
-            y: currentCenter.y + handlerDy 
+        // Decide base center and displacement. If a move *session* exists (handler started a drag),
+        // use the original center captured at session start so large/fast handler moves apply the
+        // full displacement. Otherwise fall back to incremental delta using _prevHandlerPos.
+        const sessionForHandler = _moveSessions.get(handlerDoc.id);
+
+        let baseCenter = currentCenter;
+        if (sessionForHandler && sessionForHandler.originalCenters && sessionForHandler.originalCenters.has(td.id)) {
+          baseCenter = sessionForHandler.originalCenters.get(td.id);
+        }
+
+        let dispX, dispY;
+        if (sessionForHandler && sessionForHandler.startHandlerC) {
+          dispX = handlerCenterNow.x - sessionForHandler.startHandlerC.x;
+          dispY = handlerCenterNow.y - sessionForHandler.startHandlerC.y;
+        } else {
+          dispX = handlerCenterNow.x - prevHandlerPos.x;
+          dispY = handlerCenterNow.y - prevHandlerPos.y;
+        }
+
+        const proposedCenter = {
+          x: baseCenter.x + dispX,
+          y: baseCenter.y + dispY
         };
 
         // Clamp to radius around handler's NEW position
