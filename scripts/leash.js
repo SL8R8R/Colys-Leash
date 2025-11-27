@@ -1,5 +1,16 @@
 const MODULE_ID = "colys-leash";
 
+// Defensive runtime fallback for older clients: ensure foundry.utils.escapeHTML exists
+window.foundry = window.foundry ?? {};
+foundry.utils = foundry.utils ?? {};
+if (typeof foundry.utils.escapeHTML !== "function") {
+  foundry.utils.escapeHTML = function(s){
+    const d = document.createElement("div");
+    d.appendChild(document.createTextNode(String(s ?? "")));
+    return d.innerHTML;
+  };
+}
+
 // Immediate load log
 console.log(`${MODULE_ID} | leash.js loaded`, { user: game?.user?.id ?? null });
 
@@ -28,7 +39,7 @@ function gridDistanceUnits(p1, p2) {
 }
 
 function clampCenterToGrid(handlerC, targetC, maxUnits) {
-  // Use pixel-based clamping for stability on large moves.
+  // Pixel-based clamping for stability on large drags.
   try {
     const radiusPx = unitsToPixels(maxUnits);
     const dx = targetC.x - handlerC.x;
@@ -38,7 +49,7 @@ function clampCenterToGrid(handlerC, targetC, maxUnits) {
     const t = radiusPx / distPx;
     return { x: handlerC.x + dx * t, y: handlerC.y + dy * t };
   } catch (err) {
-    // Fallback to original behavior using grid units if anything goes wrong
+    // Fallback: conservative binary-search using grid units.
     const currentUnits = gridDistanceUnits(handlerC, targetC);
     if (currentUnits <= maxUnits) return { x: targetC.x, y: targetC.y };
     const dx = targetC.x - handlerC.x;
@@ -57,14 +68,16 @@ function clampCenterToGrid(handlerC, targetC, maxUnits) {
   }
 }
 
-/** Safe HTML-escape helper (fallback for missing Foundry util) */
+/** Safe HTML-escape helper (uses foundry utils / Handlebars if available) */
 function escapeHtml(str) {
-  if (str == null) return "";
   try {
-    if (typeof Handlebars?.escapeExpression === "function") return Handlebars.escapeExpression(String(str));
+    if (typeof foundry?.utils?.escapeHTML === "function") return foundry.utils.escapeHTML(String(str ?? ""));
+  } catch {}
+  try {
+    if (typeof Handlebars?.escapeExpression === "function") return Handlebars.escapeExpression(String(str ?? ""));
   } catch {}
   const div = document.createElement("div");
-  div.appendChild(document.createTextNode(String(str)));
+  div.appendChild(document.createTextNode(String(str ?? "")));
   return div.innerHTML;
 }
 
@@ -79,7 +92,6 @@ async function setLeashFlag(doc, value) {
 async function unsetLeashFlag(doc) {
   try { return await doc.unsetFlag(MODULE_ID, "leash"); } catch (e) { console.warn(`${MODULE_ID} | unsetFlag failed`, e); }
 }
-// Safe getter for arbitrary legacy scope without throwing
 function safeScopeGetFlag(scope, doc, key) {
   try { return doc?.getFlag(scope, key); } catch (e) { return undefined; }
 }
@@ -270,6 +282,7 @@ function openLeashDialog(targetDoc) {
 
 /* ---------- Movement Enforcement (Leashed token) ---------- */
 
+// Enforce per-token preUpdate movement (uses pixel clamping, silent)
 Hooks.on("preUpdateToken", (tokenDoc, update) => {
   if (update.x === undefined && update.y === undefined) return;
 
@@ -287,7 +300,6 @@ Hooks.on("preUpdateToken", (tokenDoc, update) => {
   const handlerCenter = documentCenterPx(handlerDoc);
   const maxUnits = leashData.distance;
 
-  // Use pixel-based measurement for consistency
   const radiusPx = unitsToPixels(maxUnits);
   const dx = targetCenter.x - handlerCenter.x;
   const dy = targetCenter.y - handlerCenter.y;
@@ -307,98 +319,114 @@ Hooks.on("preUpdateToken", (tokenDoc, update) => {
   update.y = clampedCenter.y - targetCenter.hPx / 2;
 });
 
-/* ---------- Handler Auto-Pull ---------- */
+/* ---------- Handler Auto-Pull (session-aware) ---------- */
 
+// Track small-step deltas for quick moves and sessions for drag operations
 const _lastDelta = new Map();
+// handlerId -> { startHandlerC: {x,y}, originalCenters: Map(tokenId -> {x,y}), last: timestamp }
+const _moveSessions = new Map();
 
+function clearStaleSessions(timeout = 300) {
+  const now = Date.now();
+  for (const [id, s] of _moveSessions) {
+    if ((now - (s.last || 0)) > timeout) _moveSessions.delete(id);
+  }
+}
+
+// Record delta and start/update a session for handlers
 Hooks.on("preUpdateToken", (tokenDoc, update) => {
   if (update.x === undefined && update.y === undefined) return;
+
   const dx = (update.x ?? tokenDoc.x) - tokenDoc.x;
   const dy = (update.y ?? tokenDoc.y) - tokenDoc.y;
-  _lastDelta.set(tokenDoc.id, { dx, dy });
+  _lastDelta.set(tokenDoc.id, { dx, dy, t: Date.now() });
+
+  const scene = tokenDoc.parent;
+  if (!scene) return;
+
+  // If token is a handler for any leashed tokens, create or refresh a session
+  const hasLeashed = scene.tokens.some(td => {
+    const leash = getLeashFlag(td);
+    return leash && leash.handlerId === tokenDoc.id;
+  });
+  if (!hasLeashed) return;
+
+  const existing = _moveSessions.get(tokenDoc.id);
+  if (!existing) {
+    const startHandlerC = documentCenterPx(tokenDoc);
+    const originalCenters = new Map();
+    for (const td of scene.tokens) {
+      const leash = getLeashFlag(td);
+      if (!leash || leash.handlerId !== tokenDoc.id) continue;
+      originalCenters.set(td.id, documentCenterPx(td));
+    }
+    _moveSessions.set(tokenDoc.id, { startHandlerC, originalCenters, last: Date.now() });
+  } else {
+    existing.last = Date.now();
+  }
 });
 
-Hooks.on("updateToken", (tokenDoc, changes) => {
+// Apply handler-pull/clamp using session cumulative movement (or single-step delta)
+Hooks.on("updateToken", async (tokenDoc, changes) => {
   const delta = _lastDelta.get(tokenDoc.id);
   _lastDelta.delete(tokenDoc.id);
-  if (!delta) return;
+
+  const session = _moveSessions.get(tokenDoc.id);
+  if (session) session.last = Date.now();
+
+  if (!delta && !session) return;
 
   const scene = tokenDoc.parent;
   if (!scene) return;
 
   const handlerDoc = tokenDoc;
-  const handlerCenter = documentCenterPx(handlerDoc);
+  const handlerCenterNow = documentCenterPx(handlerDoc);
+  const updates = [];
 
-  const DEBUG = true;
+  for (const td of scene.tokens) {
+    const leash = getLeashFlag(td);
+    if (!leash || leash.handlerId !== handlerDoc.id) continue;
 
-  // Defer leash updates until after Foundry finishes this update cycle
-  setTimeout(async () => {
-    for (const td of scene.tokens) {
-      const leash = getLeashFlag(td);
-      if (!leash || leash.handlerId !== handlerDoc.id) continue;
+    const maxUnits = leash.distance;
+    const sizePx = canvas.dimensions.size;
+    const wPx = (td.width ?? 1) * sizePx, hPx = (td.height ?? 1) * sizePx;
 
-      const maxUnits = leash.distance;
-      const targetCNow = documentCenterPx(td);
+    const originalCenter = session?.originalCenters?.get(td.id) ?? documentCenterPx(td);
 
-      // Proposed new center based on handler delta
-      let proposedCenter = {
-        x: targetCNow.x + delta.dx,
-        y: targetCNow.y + delta.dy
+    let proposedCenter;
+    if (session && session.startHandlerC) {
+      proposedCenter = {
+        x: originalCenter.x + (handlerCenterNow.x - session.startHandlerC.x),
+        y: originalCenter.y + (handlerCenterNow.y - session.startHandlerC.y)
       };
-
-      // Clamp to leash radius
-      const radiusPx = unitsToPixels(maxUnits);
-      const ddx = proposedCenter.x - handlerCenter.x;
-      const ddy = proposedCenter.y - handlerCenter.y;
-      const distPx = Math.hypot(ddx, ddy);
-
-      let finalCenter = proposedCenter;
-      let clamped = false;
-      if (distPx > radiusPx && distPx > 1e-6) {
-        const t = radiusPx / distPx;
-        finalCenter = {
-          x: handlerCenter.x + ddx * t,
-          y: handlerCenter.y + ddy * t
-        };
-        clamped = true;
-      }
-
-      if (DEBUG && clamped) {
-        console.debug(`${MODULE_ID} | pull-clamp`, {
-          handlerId: handlerDoc.id, tokenId: td.id,
-          maxUnits, radiusPx, distPx,
-          delta,
-          targetCNow, proposedCenter, finalCenter
-        });
-      }
-
-      const sizePx = canvas.dimensions.size;
-      const wPx = (td.width ?? 1) * sizePx;
-      const hPx = (td.height ?? 1) * sizePx;
-
-      const finalPos = {
-        x: finalCenter.x - wPx / 2,
-        y: finalCenter.y - hPx / 2
-      };
-
-      const tokenObj = td.object;
-      if (tokenObj) {
-        // Animate movement smoothly
-        await tokenObj.animateMovement(finalPos, { duration: 300 });
-      } else {
-        // Fallback if object not ready
-        await td.update(finalPos);
-      }
-
-      updateRingPosition(leash.handlerId, td.id, handlerCenter, maxUnits);
+    } else {
+      proposedCenter = { x: originalCenter.x + (delta?.dx ?? 0), y: originalCenter.y + (delta?.dy ?? 0) };
     }
-  }, 0);
+
+    const radiusPx = unitsToPixels(maxUnits);
+    const ddx = proposedCenter.x - handlerCenterNow.x;
+    const ddy = proposedCenter.y - handlerCenterNow.y;
+    const distPx = Math.hypot(ddx, ddy);
+
+    let finalCenter = proposedCenter;
+    if (distPx > radiusPx && distPx > 1e-6) {
+      const t = radiusPx / distPx;
+      finalCenter = { x: handlerCenterNow.x + ddx * t, y: handlerCenterNow.y + ddy * t };
+    }
+
+    updates.push({ _id: td.id, x: finalCenter.x - wPx / 2, y: finalCenter.y - hPx / 2 });
+
+    updateRingPosition(leash.handlerId, td.id, handlerCenterNow, maxUnits);
+  }
+
+  if (updates.length) await scene.updateEmbeddedDocuments("Token", updates);
+
+  clearStaleSessions(250);
 });
 
 /* ---------- Visual Leash Rings ---------- */
 
 const _rings = new Map();
-
 function ringKey(handlerId, targetId) { return `${handlerId}:${targetId}`; }
 
 function showRingForPair(handlerDoc, targetDoc, distance) {
@@ -522,3 +550,4 @@ Hooks.on("deleteToken", (tokenDoc) => {
     if (td.id === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
   }
 });
+```// filepath:
