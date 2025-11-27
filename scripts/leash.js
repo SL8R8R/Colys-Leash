@@ -361,6 +361,8 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
     const handlerCenterNow = documentCenterPx(handlerDoc);
     const updates = [];
 
+    console.log(`Handler Position: ${handlerCenterNow.x}, ${handlerCenterNow.y}`); // Debugging output
+
     for (const td of scene.tokens) {
         const leash = getLeashFlag(td);
         if (!leash || leash.handlerId !== handlerDoc.id) continue;
@@ -374,6 +376,8 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
 
         // Directly set the proposed center to the handler's current position
         const proposedCenter = { x: handlerCenterNow.x, y: handlerCenterNow.y };
+
+        console.log(`Proposed Center for ${td.id}: ${proposedCenter.x}, ${proposedCenter.y}`); // Debugging output
 
         // Clamp to radius
         const radiusPx = unitsToPixels(maxUnits);
