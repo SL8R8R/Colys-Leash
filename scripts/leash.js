@@ -379,11 +379,9 @@ Hooks.once("ready", () => {
                 x: originalCenter.x + (handlerCenterNow.x - session.startHandlerC.x),
                 y: originalCenter.y + (handlerCenterNow.y - session.startHandlerC.y)
             };
-        } else if (delta) {
-            // Single step: move token by same delta as handler
-            proposedCenter = { x: handlerCenterNow.x, y: handlerCenterNow.y }; // Update to use handler's current position
         } else {
-            proposedCenter = originalCenter;
+            // Directly set the proposed center to the handler's current position
+            proposedCenter = { x: handlerCenterNow.x, y: handlerCenterNow.y };
         }
 
         // Clamp to radius
