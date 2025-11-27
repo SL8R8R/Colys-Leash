@@ -362,58 +362,58 @@ Hooks.once("ready", () => {
     const updates = [];
 
     for (const td of scene.tokens) {
-      const leash = getLeashFlag(td);
-      if (!leash || leash.handlerId !== handlerDoc.id) continue;
+        const leash = getLeashFlag(td);
+        if (!leash || leash.handlerId !== handlerDoc.id) continue;
 
-      const maxUnits = leash.distance;
-      const sizePx = canvas.dimensions.size;
-      const wPx = (td.width ?? 1) * sizePx, hPx = (td.height ?? 1) * sizePx;
+        const maxUnits = leash.distance;
+        const sizePx = canvas.dimensions.size;
+        const wPx = (td.width ?? 1) * sizePx, hPx = (td.height ?? 1) * sizePx;
 
-      // Use session's original center if it exists, otherwise current token center
-      const originalCenter = session?.originalCenters?.get(td.id) ?? documentCenterPx(td);
+        // Use session's original center if it exists, otherwise current token center
+        const originalCenter = session?.originalCenters?.get(td.id) ?? documentCenterPx(td);
 
-      let proposedCenter;
-      if (session && session.startHandlerC) {
-        // Drag mode: move token by same delta as handler moved from session start
-        proposedCenter = {
-          x: originalCenter.x + (handlerCenterNow.x - session.startHandlerC.x),
-          y: originalCenter.y + (handlerCenterNow.y - session.startHandlerC.y)
-        };
-      } else if (delta) {
-        // Single step: move token by same delta as handler
-        proposedCenter = { x: originalCenter.x + delta.dx, y: originalCenter.y + delta.dy };
-      } else {
-        proposedCenter = originalCenter;
-      }
+        let proposedCenter;
+        if (session && session.startHandlerC) {
+            // Drag mode: move token by same delta as handler moved from session start
+            proposedCenter = {
+                x: originalCenter.x + (handlerCenterNow.x - session.startHandlerC.x),
+                y: originalCenter.y + (handlerCenterNow.y - session.startHandlerC.y)
+            };
+        } else if (delta) {
+            // Single step: move token by same delta as handler
+            proposedCenter = { x: handlerCenterNow.x, y: handlerCenterNow.y }; // Update to use handler's current position
+        } else {
+            proposedCenter = originalCenter;
+        }
 
-      // Clamp to radius
-      const radiusPx = unitsToPixels(maxUnits);
-      const ddx = proposedCenter.x - handlerCenterNow.x;
-      const ddy = proposedCenter.y - handlerCenterNow.y;
-      const distPx = Math.hypot(ddx, ddy);
+        // Clamp to radius
+        const radiusPx = unitsToPixels(maxUnits);
+        const ddx = proposedCenter.x - handlerCenterNow.x;
+        const ddy = proposedCenter.y - handlerCenterNow.y;
+        const distPx = Math.hypot(ddx, ddy);
 
-      let finalCenter = proposedCenter;
-      if (distPx > radiusPx && distPx > 1e-6) {
-        const t = radiusPx / distPx;
-        finalCenter = { x: handlerCenterNow.x + ddx * t, y: handlerCenterNow.y + ddy * t };
-      }
+        let finalCenter = proposedCenter;
+        if (distPx > radiusPx && distPx > 1e-6) {
+            const t = radiusPx / distPx;
+            finalCenter = { x: handlerCenterNow.x + ddx * t, y: handlerCenterNow.y + ddy * t };
+        }
 
-      updates.push({ _id: td.id, x: finalCenter.x - wPx / 2, y: finalCenter.y - hPx / 2 });
+        updates.push({ _id: td.id, x: finalCenter.x - wPx / 2, y: finalCenter.y - hPx / 2 });
 
-      updateRingPosition(leash.handlerId, td.id, handlerCenterNow, maxUnits);
+        updateRingPosition(leash.handlerId, td.id, handlerCenterNow, maxUnits);
     }
 
     if (updates.length) {
-      for (const u of updates) _internalUpdating.add(u._id);
-      try {
-        await scene.updateEmbeddedDocuments("Token", updates, { render: true });
-      } finally {
-        for (const u of updates) _internalUpdating.delete(u._id);
-      }
+        for (const u of updates) _internalUpdating.add(u._id);
+        try {
+            await scene.updateEmbeddedDocuments("Token", updates, { render: true });
+        } finally {
+            for (const u of updates) _internalUpdating.delete(u._id);
+        }
     }
 
     clearStaleSessions(250);
-  });
+});
 
   // Ring visibility: hover
   Hooks.on("hoverToken", (token, hovered) => {
