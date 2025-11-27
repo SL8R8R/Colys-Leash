@@ -401,20 +401,28 @@ Hooks.once("ready", () => {
         }
 
         let dispX, dispY;
+        // Compute both possible displacements: session-based (since drag started) and
+        // incremental (since previous update). Choose the one with larger magnitude —
+        // this avoids stale or zeroed session origins accidentally nullifying movement.
+        let dispSessionX = 0, dispSessionY = 0;
         if (sessionForHandler && sessionForHandler.startHandlerC) {
-          dispX = handlerCenterNow.x - sessionForHandler.startHandlerC.x;
-          dispY = handlerCenterNow.y - sessionForHandler.startHandlerC.y;
-          // If the session-derived displacement is effectively zero but a previous handler
-          // position exists (meaning the handler did move), fall back to the incremental delta
-          // and apply it to the current token center so we don't apply a stale/origin-based move.
-          if (Math.abs(dispX) < 1e-6 && Math.abs(dispY) < 1e-6 && prevHandlerPos && (prevHandlerPos.x !== handlerCenterNow.x || prevHandlerPos.y !== handlerCenterNow.y)) {
-            dispX = handlerCenterNow.x - prevHandlerPos.x;
-            dispY = handlerCenterNow.y - prevHandlerPos.y;
-            baseCenter = currentCenter;
-          }
+          dispSessionX = handlerCenterNow.x - sessionForHandler.startHandlerC.x;
+          dispSessionY = handlerCenterNow.y - sessionForHandler.startHandlerC.y;
+        }
+        const dispPrevX = prevHandlerPos ? (handlerCenterNow.x - prevHandlerPos.x) : 0;
+        const dispPrevY = prevHandlerPos ? (handlerCenterNow.y - prevHandlerPos.y) : 0;
+
+        // Choose which displacement to apply (session wins if its magnitude is >= prev magnitude)
+        const magSession = Math.hypot(dispSessionX, dispSessionY);
+        const magPrev = Math.hypot(dispPrevX, dispPrevY);
+        if (magSession >= magPrev && magSession > 1e-6 && sessionForHandler && sessionForHandler.originalCenters && sessionForHandler.originalCenters.has(td.id)) {
+          dispX = dispSessionX;
+          dispY = dispSessionY;
+          baseCenter = sessionForHandler.originalCenters.get(td.id);
         } else {
-          dispX = handlerCenterNow.x - prevHandlerPos.x;
-          dispY = handlerCenterNow.y - prevHandlerPos.y;
+          dispX = dispPrevX;
+          dispY = dispPrevY;
+          baseCenter = currentCenter;
         }
 
         const proposedCenter = {
