@@ -415,6 +415,17 @@ Hooks.once("ready", () => {
         // Choose which displacement to apply (session wins if its magnitude is >= prev magnitude)
         const magSession = Math.hypot(dispSessionX, dispSessionY);
         const magPrev = Math.hypot(dispPrevX, dispPrevY);
+
+        // Optional debug: print candidate magnitudes and flags
+        try {
+          if (typeof window !== "undefined" && window.colysLeashDebug) {
+            const hasSession = !!(sessionForHandler && sessionForHandler.originalCenters && sessionForHandler.originalCenters.has(td.id));
+            console.log(`${MODULE_ID} | Candidate mags: magSession=${magSession}, magPrev=${magPrev}, hasSessionForToken=${hasSession}`);
+            if (hasSession) console.log(`${MODULE_ID} | session.startHandlerC=`, sessionForHandler.startHandlerC, " originalCenter=", sessionForHandler.originalCenters.get(td.id));
+            console.log(`${MODULE_ID} | prevHandlerPos=`, prevHandlerPos, " handlerCenterNow=", handlerCenterNow);
+          }
+        } catch (e) {}
+
         if (magSession >= magPrev && magSession > 1e-6 && sessionForHandler && sessionForHandler.originalCenters && sessionForHandler.originalCenters.has(td.id)) {
           dispX = dispSessionX;
           dispY = dispSessionY;
@@ -424,6 +435,12 @@ Hooks.once("ready", () => {
           dispY = dispPrevY;
           baseCenter = currentCenter;
         }
+
+        try {
+          if (typeof window !== "undefined" && window.colysLeashDebug) {
+            console.log(`${MODULE_ID} | Chosen disp: dx=${dispX}, dy=${dispY}, baseCenter=`, baseCenter);
+          }
+        } catch (e) {}
 
         const proposedCenter = {
           x: baseCenter.x + dispX,
