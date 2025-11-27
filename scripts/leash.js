@@ -346,7 +346,10 @@ Hooks.once("ready", () => {
     }
   }
 
-Hooks.on("updateToken", async (tokenDoc, changes) => {
+  // Track previous handler positions
+  const _prevHandlerPos = new Map();
+
+  Hooks.on("updateToken", async (tokenDoc, changes) => {
     const delta = _lastDelta.get(tokenDoc.id);
     _lastDelta.delete(tokenDoc.id);
 
@@ -360,9 +363,14 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
 
     const handlerDoc = tokenDoc;
     const handlerCenterNow = documentCenterPx(handlerDoc);
-    const updates = [];
+    
+    // Get the previous handler position (from before this update)
+    const prevHandlerPos = _prevHandlerPos.get(handlerDoc.id) ?? handlerCenterNow;
+    
+    // Store current position for next update
+    _prevHandlerPos.set(handlerDoc.id, handlerCenterNow);
 
-    console.log(`Handler Position: ${handlerCenterNow.x}, ${handlerCenterNow.y}`); // Debugging output
+    const updates = [];
 
     for (const td of scene.tokens) {
         const leash = getLeashFlag(td);
@@ -372,12 +380,19 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
         const sizePx = canvas.dimensions.size;
         const wPx = (td.width ?? 1) * sizePx, hPx = (td.height ?? 1) * sizePx;
 
-        // Directly set the proposed center to the handler's current position
-        const proposedCenter = { x: handlerCenterNow.x, y: handlerCenterNow.y };
+        // Get current leashed token center
+        const currentCenter = documentCenterPx(td);
 
-        console.log(`Proposed Center for ${td.id}: ${proposedCenter.x}, ${proposedCenter.y}`); // Debugging output
+        // Move leashed token by the same delta as the handler
+        const handlerDx = handlerCenterNow.x - prevHandlerPos.x;
+        const handlerDy = handlerCenterNow.y - prevHandlerPos.y;
+        
+        const proposedCenter = { 
+            x: currentCenter.x + handlerDx, 
+            y: currentCenter.y + handlerDy 
+        };
 
-        // Clamp to radius
+        // Clamp to radius around handler's NEW position
         const radiusPx = unitsToPixels(maxUnits);
         const ddx = proposedCenter.x - handlerCenterNow.x;
         const ddy = proposedCenter.y - handlerCenterNow.y;
@@ -404,7 +419,7 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
     }
 
     clearStaleSessions(250);
-});
+  });
 
   // Ring visibility: hover
   Hooks.on("hoverToken", (token, hovered) => {
