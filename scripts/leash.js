@@ -364,8 +364,15 @@ Hooks.once("ready", () => {
     const handlerDoc = tokenDoc;
     const handlerCenterNow = documentCenterPx(handlerDoc);
     
-    // Get the previous handler position (from before this update)
-    const prevHandlerPos = _prevHandlerPos.get(handlerDoc.id) ?? handlerCenterNow;
+    // Initialize previous position on first move (use delta if available)
+    let prevHandlerPos = _prevHandlerPos.get(handlerDoc.id);
+    if (!prevHandlerPos && delta) {
+      // First move: calculate previous position from the delta
+      prevHandlerPos = { x: handlerCenterNow.x - delta.dx, y: handlerCenterNow.y - delta.dy };
+    } else if (!prevHandlerPos) {
+      // No delta and no previous position: use current
+      prevHandlerPos = handlerCenterNow;
+    }
     
     // Store current position for next update
     _prevHandlerPos.set(handlerDoc.id, handlerCenterNow);
