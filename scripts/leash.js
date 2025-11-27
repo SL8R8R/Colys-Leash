@@ -381,7 +381,7 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
     };
     const tokenObj = td.object;
     if (tokenObj) {
-      await tokenObj.animateMovement(finalPos, { duration: 250 }); // duration in ms
+      await tokenObj.animateMovement(finalPos, { duration: 1000 }); // duration in ms
     } else {
       // fallback if object not ready
       await td.update(finalPos);
