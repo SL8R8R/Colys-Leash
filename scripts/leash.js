@@ -285,23 +285,26 @@ Hooks.on("preUpdateToken", (tokenDoc, update) => {
   const newY = update.y ?? tokenDoc.y;
   const targetCenter = centerFromTopLeft(tokenDoc, newX, newY);
   const handlerCenter = documentCenterPx(handlerDoc);
-  const distUnits = gridDistanceUnits(handlerCenter, targetCenter);
   const maxUnits = leashData.distance;
 
-  if (distUnits <= maxUnits) return;
+  // Use pixel-based measurement for consistency
+  const radiusPx = unitsToPixels(maxUnits);
+  const dx = targetCenter.x - handlerCenter.x;
+  const dy = targetCenter.y - handlerCenter.y;
+  const distPx = Math.hypot(dx, dy);
+
+  if (distPx <= radiusPx) return;
 
   let behavior = "block";
   try { behavior = game.settings.get(MODULE_ID, "exceedBehavior"); } catch {}
-  const unitsName = canvas.scene.grid.units || "units";
   if (behavior === "block") {
-    ui.notifications.warn(`${tokenDoc.name ?? "Token"} is leashed: cannot move more than ${maxUnits} ${unitsName} from handler.`);
     return false;
   }
 
-  const clampedCenter = clampCenterToGrid(handlerCenter, targetCenter, maxUnits);
+  const t = (radiusPx / distPx) || 0;
+  const clampedCenter = { x: handlerCenter.x + dx * t, y: handlerCenter.y + dy * t };
   update.x = clampedCenter.x - targetCenter.wPx / 2;
   update.y = clampedCenter.y - targetCenter.hPx / 2;
-  ui.notifications.info(`Movement clamped to ${maxUnits} ${unitsName} leash boundary.`);
 });
 
 /* ---------- Handler Auto-Pull ---------- */
@@ -327,13 +330,15 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
   const handlerCenter = documentCenterPx(handlerDoc);
   const updates = [];
 
+  // Debug toggle
+  const DEBUG = true;
+
   for (const td of scene.tokens) {
     const leash = getLeashFlag(td);
     if (!leash || leash.handlerId !== handlerDoc.id) continue;
 
     const maxUnits = leash.distance;
     const targetCNow = documentCenterPx(td);
-    const unitsName = canvas.scene.grid.units || "units";
 
     let proposedCenter;
     let mode = "drag";
@@ -344,11 +349,27 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
       proposedCenter = targetCNow;
     }
 
-    const dUnits = gridDistanceUnits(handlerCenter, proposedCenter);
+    // Pixel-based distance and clamping
+    const radiusPx = unitsToPixels(maxUnits);
+    const ddx = proposedCenter.x - handlerCenter.x;
+    const ddy = proposedCenter.y - handlerCenter.y;
+    const distPx = Math.hypot(ddx, ddy);
+
     let finalCenter = proposedCenter;
-    if (dUnits > maxUnits) {
-      finalCenter = clampCenterToGrid(handlerCenter, proposedCenter, maxUnits);
-      ui.notifications.info(`${td.name ?? "Token"} pulled/clamped to ${maxUnits} ${unitsName} leash boundary.`);
+    let clamped = false;
+    if (distPx > radiusPx && distPx > 1e-6) {
+      const t = radiusPx / distPx;
+      finalCenter = { x: handlerCenter.x + ddx * t, y: handlerCenter.y + ddy * t };
+      clamped = true;
+    }
+
+    if (DEBUG && clamped) {
+      console.debug(`${MODULE_ID} | pull-clamp`, {
+        handlerId: handlerDoc.id, tokenId: td.id,
+        maxUnits, radiusPx, distPx,
+        delta, mode,
+        targetCNow, proposedCenter, finalCenter
+      });
     }
 
     const sizePx = canvas.dimensions.size;
