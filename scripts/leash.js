@@ -345,7 +345,7 @@ Hooks.once("ready", () => {
     }
   }
 
-  Hooks.on("updateToken", async (tokenDoc, changes) => {
+Hooks.on("updateToken", async (tokenDoc, changes) => {
     const delta = _lastDelta.get(tokenDoc.id);
     _lastDelta.delete(tokenDoc.id);
 
@@ -372,17 +372,8 @@ Hooks.once("ready", () => {
         // Use session's original center if it exists, otherwise current token center
         const originalCenter = session?.originalCenters?.get(td.id) ?? documentCenterPx(td);
 
-        let proposedCenter;
-        if (session && session.startHandlerC) {
-            // Drag mode: move token by same delta as handler moved from session start
-            proposedCenter = {
-                x: originalCenter.x + (handlerCenterNow.x - session.startHandlerC.x),
-                y: originalCenter.y + (handlerCenterNow.y - session.startHandlerC.y)
-            };
-        } else {
-            // Directly set the proposed center to the handler's current position
-            proposedCenter = { x: handlerCenterNow.x, y: handlerCenterNow.y };
-        }
+        // Directly set the proposed center to the handler's current position
+        const proposedCenter = { x: handlerCenterNow.x, y: handlerCenterNow.y };
 
         // Clamp to radius
         const radiusPx = unitsToPixels(maxUnits);
