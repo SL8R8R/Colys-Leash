@@ -14,7 +14,7 @@
   "authors": [
     { "name": "Slater" }
   ],
-  "esmodules": [
+  "scripts": [
     "scripts/leash.js"
   ],
   "styles": [
