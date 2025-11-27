@@ -428,6 +428,14 @@ Hooks.once("ready", () => {
 
         updates.push({ _id: td.id, x: finalCenter.x - wPx / 2, y: finalCenter.y - hPx / 2 });
 
+        // Optional debug output (enable by setting `window.colysLeashDebug = true` in the Foundry console)
+        try {
+          if (typeof window !== "undefined" && window.colysLeashDebug) {
+            console.log(`${MODULE_ID} | Handler disp: dx=${dispX}, dy=${dispY}, prevPos: `, prevHandlerPos, " currentPos: ", handlerCenterNow);
+            console.log(`${MODULE_ID} | Leashed token ${td.id}: current=${currentCenter.x},${currentCenter.y} -> proposed=${proposedCenter.x},${proposedCenter.y} -> final=${finalCenter.x},${finalCenter.y} radius=${radiusPx}`);
+          }
+        } catch (e) {}
+
         updateRingPosition(leash.handlerId, td.id, handlerCenterNow, maxUnits);
     }
 
