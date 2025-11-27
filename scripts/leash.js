@@ -318,7 +318,7 @@ Hooks.on("preUpdateToken", (tokenDoc, update) => {
   _lastDelta.set(tokenDoc.id, { dx, dy });
 });
 
-Hooks.on("updateToken", async (tokenDoc, changes) => {
+Hooks.on("updateToken", (tokenDoc, changes) => {
   const delta = _lastDelta.get(tokenDoc.id);
   _lastDelta.delete(tokenDoc.id);
   if (!delta) return;
@@ -331,64 +331,68 @@ Hooks.on("updateToken", async (tokenDoc, changes) => {
 
   const DEBUG = true;
 
-  for (const td of scene.tokens) {
-    const leash = getLeashFlag(td);
-    if (!leash || leash.handlerId !== handlerDoc.id) continue;
+  // Defer leash updates until after Foundry finishes this update cycle
+  setTimeout(async () => {
+    for (const td of scene.tokens) {
+      const leash = getLeashFlag(td);
+      if (!leash || leash.handlerId !== handlerDoc.id) continue;
 
-    const maxUnits = leash.distance;
-    const targetCNow = documentCenterPx(td);
+      const maxUnits = leash.distance;
+      const targetCNow = documentCenterPx(td);
 
-    // Proposed new center based on handler delta
-    let proposedCenter = {
-      x: targetCNow.x + delta.dx,
-      y: targetCNow.y + delta.dy
-    };
-
-    // Clamp to leash radius
-    const radiusPx = unitsToPixels(maxUnits);
-    const ddx = proposedCenter.x - handlerCenter.x;
-    const ddy = proposedCenter.y - handlerCenter.y;
-    const distPx = Math.hypot(ddx, ddy);
-
-    let finalCenter = proposedCenter;
-    let clamped = false;
-    if (distPx > radiusPx && distPx > 1e-6) {
-      const t = radiusPx / distPx;
-      finalCenter = {
-        x: handlerCenter.x + ddx * t,
-        y: handlerCenter.y + ddy * t
+      // Proposed new center based on handler delta
+      let proposedCenter = {
+        x: targetCNow.x + delta.dx,
+        y: targetCNow.y + delta.dy
       };
-      clamped = true;
+
+      // Clamp to leash radius
+      const radiusPx = unitsToPixels(maxUnits);
+      const ddx = proposedCenter.x - handlerCenter.x;
+      const ddy = proposedCenter.y - handlerCenter.y;
+      const distPx = Math.hypot(ddx, ddy);
+
+      let finalCenter = proposedCenter;
+      let clamped = false;
+      if (distPx > radiusPx && distPx > 1e-6) {
+        const t = radiusPx / distPx;
+        finalCenter = {
+          x: handlerCenter.x + ddx * t,
+          y: handlerCenter.y + ddy * t
+        };
+        clamped = true;
+      }
+
+      if (DEBUG && clamped) {
+        console.debug(`${MODULE_ID} | pull-clamp`, {
+          handlerId: handlerDoc.id, tokenId: td.id,
+          maxUnits, radiusPx, distPx,
+          delta,
+          targetCNow, proposedCenter, finalCenter
+        });
+      }
+
+      const sizePx = canvas.dimensions.size;
+      const wPx = (td.width ?? 1) * sizePx;
+      const hPx = (td.height ?? 1) * sizePx;
+
+      const finalPos = {
+        x: finalCenter.x - wPx / 2,
+        y: finalCenter.y - hPx / 2
+      };
+
+      const tokenObj = td.object;
+      if (tokenObj) {
+        // Animate movement smoothly
+        await tokenObj.animateMovement(finalPos, { duration: 300 });
+      } else {
+        // Fallback if object not ready
+        await td.update(finalPos);
+      }
+
+      updateRingPosition(leash.handlerId, td.id, handlerCenter, maxUnits);
     }
-
-    if (DEBUG && clamped) {
-      console.debug(`${MODULE_ID} | pull-clamp`, {
-        handlerId: handlerDoc.id, tokenId: td.id,
-        maxUnits, radiusPx, distPx,
-        delta,
-        targetCNow, proposedCenter, finalCenter
-      });
-    }
-
-    const sizePx = canvas.dimensions.size;
-    const wPx = (td.width ?? 1) * sizePx;
-    const hPx = (td.height ?? 1) * sizePx;
-
-    // Animate movement instead of instant update
-    const finalPos = {
-      x: finalCenter.x - wPx / 2,
-      y: finalCenter.y - hPx / 2
-    };
-    const tokenObj = td.object;
-    if (tokenObj) {
-      await tokenObj.animateMovement(finalPos, { duration: 1000 }); // duration in ms
-    } else {
-      // fallback if object not ready
-      await td.update(finalPos);
-    }
-
-    updateRingPosition(leash.handlerId, td.id, handlerCenter, maxUnits);
-  }
+  }, 0);
 });
 
 /* ---------- Visual Leash Rings ---------- */
