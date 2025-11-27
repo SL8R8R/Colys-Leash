@@ -442,10 +442,25 @@ Hooks.once("ready", () => {
           }
         } catch (e) {}
 
-        const proposedCenter = {
+        let proposedCenter = {
           x: baseCenter.x + dispX,
           y: baseCenter.y + dispY
         };
+
+        // If the chosen proposed center produced no movement (equals current center)
+        // but the handler did move since the previous recorded position, fall back
+        // to applying the incremental delta to the current center. This avoids
+        // silently ignoring handler movement when session origins are stale.
+        try {
+          if (prevHandlerPos && Math.abs(proposedCenter.x - currentCenter.x) < 1e-6 && Math.abs(proposedCenter.y - currentCenter.y) < 1e-6
+              && (prevHandlerPos.x !== handlerCenterNow.x || prevHandlerPos.y !== handlerCenterNow.y)) {
+            proposedCenter = { x: currentCenter.x + (handlerCenterNow.x - prevHandlerPos.x), y: currentCenter.y + (handlerCenterNow.y - prevHandlerPos.y) };
+            // update dispX/dispY for logging
+            dispX = proposedCenter.x - baseCenter.x;
+            dispY = proposedCenter.y - baseCenter.y;
+            if (typeof window !== "undefined" && window.colysLeashDebug) console.log(`${MODULE_ID} | Fallback applied: proposedCenter now=`, proposedCenter);
+          }
+        } catch (e) {}
 
         // Clamp to radius around handler's NEW position
         const radiusPx = unitsToPixels(maxUnits);
