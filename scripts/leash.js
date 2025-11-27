@@ -65,12 +65,11 @@ function safeScopeGetFlag(scope, doc, key) {
   try { return doc?.getFlag(scope, key); } catch (e) { return undefined; }
 }
 
-/* ---------- Settings registration (idempotent) ---------- */
-function registerSettings() {
+/* ---------- Settings registration (only once at init) ---------- */
+Hooks.once("init", () => {
   if (__colys_inited) return;
   __colys_inited = true;
-
-  console.log(`${MODULE_ID} | registerSettings`);
+  console.log(`${MODULE_ID} | init: registering settings`);
 
   try {
     game.settings.register(MODULE_ID, "defaultDistance", {
@@ -129,51 +128,61 @@ function registerSettings() {
       default: "drag"
     });
   } catch (e) {}
-}
+});
 
-/* ---------- Core logic moved into registerable function ---------- */
-
-function registerHooks() {
+/* ---------- Register all game hooks at ready ---------- */
+Hooks.once("ready", () => {
   if (__colys_hooks_registered) return;
   __colys_hooks_registered = true;
-  console.log(`${MODULE_ID} | registerHooks`);
+  console.log(`${MODULE_ID} | ready: registering hooks`);
 
-  // HUD
-  Hooks.on("renderTokenHUD", (hud, html) => {
+  // Internal state
+  const _internalUpdating = new Set();
+  const _lastDelta = new Map();
+  const _moveSessions = new Map();
+  const _rings = new Map();
+
+  function ringKey(handlerId, targetId) { return `${handlerId}:${targetId}`; }
+
+  function showRingForPair(handlerDoc, targetDoc, distance) {
     try {
-      const tokenDoc = hud?.object?.document;
-      if (!tokenDoc) return;
+      const key = ringKey(handlerDoc.id, targetDoc.id);
+      if (_rings.has(key)) return;
+      const graphics = new PIXI.Graphics();
+      graphics.zIndex = 1000;
+      graphics.lineStyle(3, 0x4caf50, 0.9);
+      graphics.beginFill(0x4caf50, 0.06);
+      const radius = unitsToPixels(distance);
+      const handlerCenter = documentCenterPx(handlerDoc);
+      graphics.drawCircle(handlerCenter.x, handlerCenter.y, radius);
+      graphics.endFill();
+      _rings.set(key, graphics);
+      canvas.primary.addChild(graphics);
+    } catch (err) { console.error(`${MODULE_ID} | showRingForPair error`, err); }
+  }
 
-      let gmOnly = true;
-      try { gmOnly = game.settings.get(MODULE_ID, "gmOnly"); } catch (e) { gmOnly = true; }
-      if (gmOnly && !game.user.isGM) return;
+  function removeRingForPair(handlerId, targetId) {
+    const key = ringKey(handlerId, targetId);
+    const gfx = _rings.get(key);
+    if (!gfx) return;
+    try { gfx.destroy(true); } catch {}
+    _rings.delete(key);
+  }
 
-      let container = html.find(".left");
-      if (!container || container.length === 0) container = html.find(".token-control.left");
-      if (!container || container.length === 0) container = html;
+  function updateRingPosition(handlerId, targetId, handlerCenter, distance) {
+    const key = ringKey(handlerId, targetId);
+    const gfx = _rings.get(key);
+    if (!gfx) return;
+    try {
+      gfx.clear();
+      gfx.lineStyle(3, 0x4caf50, 0.9);
+      gfx.beginFill(0x4caf50, 0.06);
+      const radius = unitsToPixels(distance);
+      gfx.drawCircle(handlerCenter.x, handlerCenter.y, radius);
+      gfx.endFill();
+    } catch (err) { console.error(`${MODULE_ID} | updateRingPosition error`, err); }
+  }
 
-      const leashData = getLeashFlag(tokenDoc);
-
-      if (!leashData) {
-        const btn = $(`<div class="control-icon" data-action="colys-leash" title="Leash"><i class="fas fa-link"></i></div>`);
-        btn.on("click", (ev) => { ev.stopPropagation?.(); openLeashDialog(tokenDoc); });
-        container.append(btn);
-      } else {
-        const btn = $(`<div class="control-icon" data-action="colys-unleash" title="Unleash"><i class="fas fa-unlink"></i></div>`);
-        btn.on("click", async (ev) => {
-          ev.stopPropagation?.();
-          await unsetLeashFlag(tokenDoc);
-          removeRingForPair(leashData.handlerId, tokenDoc.id);
-          ui.notifications.info(`Unleashed ${tokenDoc.name ?? "Token"}.`);
-        });
-        container.append(btn);
-      }
-    } catch (err) {
-      console.warn(`${MODULE_ID} | renderTokenHUD error`, err);
-    }
-  });
-
-  // Dialog helper (kept minimal)
   function openLeashDialog(targetDoc) {
     let defaultDistance = 5;
     try { defaultDistance = game.settings.get(MODULE_ID, "defaultDistance"); } catch {}
@@ -224,54 +233,42 @@ function registerHooks() {
     }).render(true);
   }
 
-  // Movement enforcement & handler pull logic (copied and guarded)
-  const _internalUpdating = new Set();
-  const _lastDelta = new Map();
-  const _moveSessions = new Map();
-  const _rings = new Map();
-
-  function ringKey(handlerId, targetId) { return `${handlerId}:${targetId}`; }
-
-  function showRingForPair(handlerDoc, targetDoc, distance) {
+  // HUD Hook
+  Hooks.on("renderTokenHUD", (hud, html) => {
     try {
-      const key = ringKey(handlerDoc.id, targetDoc.id);
-      if (_rings.has(key)) return;
-      const graphics = new PIXI.Graphics();
-      graphics.zIndex = 1000;
-      graphics.lineStyle(3, 0x4caf50, 0.9);
-      graphics.beginFill(0x4caf50, 0.06);
-      const radius = unitsToPixels(distance);
-      const handlerCenter = documentCenterPx(handlerDoc);
-      graphics.drawCircle(handlerCenter.x, handlerCenter.y, radius);
-      graphics.endFill();
-      _rings.set(key, graphics);
-      canvas.primary.addChild(graphics);
-    } catch (err) { console.error(`${MODULE_ID} | showRingForPair error`, err); }
-  }
+      const tokenDoc = hud?.object?.document;
+      if (!tokenDoc) return;
 
-  function removeRingForPair(handlerId, targetId) {
-    const key = ringKey(handlerId, targetId);
-    const gfx = _rings.get(key);
-    if (!gfx) return;
-    try { gfx.destroy(true); } catch {}
-    _rings.delete(key);
-  }
+      let gmOnly = true;
+      try { gmOnly = game.settings.get(MODULE_ID, "gmOnly"); } catch (e) { gmOnly = true; }
+      if (gmOnly && !game.user.isGM) return;
 
-  function updateRingPosition(handlerId, targetId, handlerCenter, distance) {
-    const key = ringKey(handlerId, targetId);
-    const gfx = _rings.get(key);
-    if (!gfx) return;
-    try {
-      gfx.clear();
-      gfx.lineStyle(3, 0x4caf50, 0.9);
-      gfx.beginFill(0x4caf50, 0.06);
-      const radius = unitsToPixels(distance);
-      gfx.drawCircle(handlerCenter.x, handlerCenter.y, radius);
-      gfx.endFill();
-    } catch (err) { console.error(`${MODULE_ID} | updateRingPosition error`, err); }
-  }
+      let container = html.find(".left");
+      if (!container || container.length === 0) container = html.find(".token-control.left");
+      if (!container || container.length === 0) container = html;
 
-  // Enforce per-token preUpdate movement
+      const leashData = getLeashFlag(tokenDoc);
+
+      if (!leashData) {
+        const btn = $(`<div class="control-icon" data-action="colys-leash" title="Leash"><i class="fas fa-link"></i></div>`);
+        btn.on("click", (ev) => { ev.stopPropagation?.(); openLeashDialog(tokenDoc); });
+        container.append(btn);
+      } else {
+        const btn = $(`<div class="control-icon" data-action="colys-unleash" title="Unleash"><i class="fas fa-unlink"></i></div>`);
+        btn.on("click", async (ev) => {
+          ev.stopPropagation?.();
+          await unsetLeashFlag(tokenDoc);
+          removeRingForPair(leashData.handlerId, tokenDoc.id);
+          ui.notifications.info(`Unleashed ${tokenDoc.name ?? "Token"}.`);
+        });
+        container.append(btn);
+      }
+    } catch (err) {
+      console.warn(`${MODULE_ID} | renderTokenHUD error`, err);
+    }
+  });
+
+  // Movement enforcement: preUpdateToken
   Hooks.on("preUpdateToken", (tokenDoc, update, options = {}, userId) => {
     if (_internalUpdating.has(tokenDoc.id)) return;
     if (update.x === undefined && update.y === undefined) return;
@@ -309,14 +306,7 @@ function registerHooks() {
     update.y = clampedCenter.y - targetCenter.hPx / 2;
   });
 
-  // Session tracking for handler moves
-  function clearStaleSessions(timeout = 300) {
-    const now = Date.now();
-    for (const [id, s] of _moveSessions) {
-      if ((now - (s.last || 0)) > timeout) _moveSessions.delete(id);
-    }
-  }
-
+  // Session tracking: record delta and start session for handlers
   Hooks.on("preUpdateToken", (tokenDoc, update) => {
     if (update.x === undefined && update.y === undefined) return;
     const dx = (update.x ?? tokenDoc.x) - tokenDoc.x;
@@ -346,6 +336,14 @@ function registerHooks() {
       existing.last = Date.now();
     }
   });
+
+  // Handler auto-pull: apply movement to leashed tokens
+  function clearStaleSessions(timeout = 300) {
+    const now = Date.now();
+    for (const [id, s] of _moveSessions) {
+      if ((now - (s.last || 0)) > timeout) _moveSessions.delete(id);
+    }
+  }
 
   Hooks.on("updateToken", async (tokenDoc, changes) => {
     const delta = _lastDelta.get(tokenDoc.id);
@@ -411,7 +409,7 @@ function registerHooks() {
     clearStaleSessions(250);
   });
 
-  // Rings hover / control hooks
+  // Ring visibility: hover
   Hooks.on("hoverToken", (token, hovered) => {
     try {
       let vis = "hover";
@@ -443,10 +441,11 @@ function registerHooks() {
         if (tokenDoc.id === leash.handlerId || tokenDoc.id === td.id) showRingForPair(handlerDoc, td, leash.distance);
       }
     } catch (err) {
-      console.warn(`${MODULE_ID} | hoverToken handler error (caught)`, err);
+      console.warn(`${MODULE_ID} | hoverToken handler error`, err);
     }
   });
 
+  // Ring visibility: control
   Hooks.on("controlToken", (token, controlled) => {
     try {
       let vis = "hover";
@@ -476,7 +475,7 @@ function registerHooks() {
         if (tokenDoc.id === leash.handlerId || tokenDoc.id === td.id || vis === "always") showRingForPair(handlerDoc, td, leash.distance);
       }
     } catch (err) {
-      console.warn(`${MODULE_ID} | controlToken handler error (caught)`, err);
+      console.warn(`${MODULE_ID} | controlToken handler error`, err);
     }
   });
 
@@ -493,17 +492,7 @@ function registerHooks() {
     }
   });
 
-  // expose local function for debug/other callers
-  window.colysLeash = window.colysLeash ?? {};
-  window.colysLeash.showRingForPair = showRingForPair;
-  window.colysLeash.removeRingForPair = removeRingForPair;
-}
-
-/* ---------- Ready tasks (idempotent) ---------- */
-function readyTasks() {
-  if (__colys_ready) return;
-  __colys_ready = true;
-  console.log(`${MODULE_ID} | readyTasks`);
+  // Expose API
   const mod = game.modules.get(MODULE_ID);
   if (mod) {
     mod.api = {
@@ -512,17 +501,7 @@ function readyTasks() {
       unleash: async (targetDoc) => unsetLeashFlag(targetDoc)
     };
   }
-}
-
-/* ---------- Ensure registration even if loaded late ---------- */
-try { registerSettings(); } catch (e) { /* ignore */ }
-try { registerHooks(); } catch (e) { /* ignore */ }
-try { readyTasks(); } catch (e) { /* ignore */ }
-
-/* ---------- Also attach to lifecycle hooks if they occur normally ---------- */
-Hooks.once("init", () => registerSettings());
-Hooks.once("ready", () => readyTasks());
-Hooks.once("canvasReady", () => registerHooks());
+});
 
 /* ---------- Load-time log ---------- */
-console.log(`${MODULE_ID} | leash.js loaded`, { user: typeof game !== "undefined" ? game.user?.id : null });
+console.log(`${MODULE_ID} | leash.js loaded`);
