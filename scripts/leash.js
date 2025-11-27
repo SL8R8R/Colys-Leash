@@ -372,12 +372,12 @@ Hooks.once("ready", () => {
       console.log(`${MODULE_ID} | First move - calculated prevPos from delta:`, prevHandlerPos, "delta:", delta, "currentHandlerPos:", handlerCenterNow);
     } else if (!prevHandlerPos) {
       // No delta and no previous position: use current
-      prevHandlerPos = handlerCenterNow;
+      prevHandlerPos = { x: handlerCenterNow.x, y: handlerCenterNow.y };
       console.log(`${MODULE_ID} | No delta/prev - using current as prev:`, prevHandlerPos);
     }
     
-    // Store current position for next update
-    _prevHandlerPos.set(handlerDoc.id, handlerCenterNow);
+    // Store current position for next update (ONLY x and y, not wPx/hPx)
+    _prevHandlerPos.set(handlerDoc.id, { x: handlerCenterNow.x, y: handlerCenterNow.y });
 
     const updates = [];
 
