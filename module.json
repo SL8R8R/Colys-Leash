@@ -1,26 +1,23 @@
 {
   "id": "colys-leash",
   "title": "Colys Leash",
-  "description": "Leash a token to a handler with adjustable distance; grid-based measurement, handler pull, and visual ring.",
-  "version": "1.2.0",
+  "description": "Leash a token to a handler with adjustable distance; handler pull and visual ring.",
+  "version": "1.3.0",
   "manifest": "https://raw.githubusercontent.com/SL8R8R/Colys-Leash/main/module.json",
-  "download": "https://github.com/SL8R8R/Colys-Leash/releases/download/v1.2.0/colys-leash.zip",
+  "download": "https://github.com/SL8R8R/Colys-Leash/releases/download/v1.3.0/colys-leash.zip",
   "compatibility": {
-    "minimum": "11",
-    "verified": "12"
+    "minimum": "12",
+    "verified": "14"
   },
-  "minimumCoreVersion": "11",
-  "compatibleCoreVersion": "12",
   "authors": [
     { "name": "Slater" }
   ],
-  "scripts": [
+  "esmodules": [
     "scripts/leash.js"
   ],
   "styles": [
     "styles/leash.css"
   ],
-  "type": "module",
   "license": "MIT",
   "url": "https://github.com/SL8R8R/Colys-Leash"
 }

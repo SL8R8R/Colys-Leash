@@ -1,59 +1,67 @@
+/**
+ * Colys Leash — leash a token to a handler token.
+ *
+ * How following works (kept deliberately stateless between moves):
+ *   - We remember the last known top-left position of every token (_lastPos).
+ *   - When a token's x/y changes, the delta is (new position - last known position).
+ *   - If that token is the handler of any leashed tokens, each follower is moved by the same delta
+ *     from wherever it is *right now*, then clamped to the leash radius around the handler.
+ *   - Pulls are queued so a second handler move can never read a follower position that a
+ *     previous, still-in-flight pull hasn't finished writing.
+ *
+ * Set `colysLeashDebug = true` in the browser console to log every pull.
+ */
+
 const MODULE_ID = "colys-leash";
+const RING_COLOR = 0x4caf50;
 
-/* ---------- Runtime guards for late loads ---------- */
-let __colys_inited = false;
-let __colys_ready = false;
-let __colys_hooks_registered = false;
-
-/* ---------- Defensive helpers ---------- */
-window.foundry = window.foundry ?? {};
-foundry.utils = foundry.utils ?? {};
-if (typeof foundry.utils.escapeHTML !== "function") {
-  foundry.utils.escapeHTML = function(s){
-    const d = document.createElement("div");
-    d.appendChild(document.createTextNode(String(s ?? "")));
-    return d.innerHTML;
-  };
+/* ---------- Small helpers ---------- */
+function dbg(...args) {
+  if (globalThis.colysLeashDebug) console.log(`${MODULE_ID} |`, ...args);
 }
 
-/* ---------- Utilities ---------- */
-function unitsToPixels(units) {
-  const dims = canvas?.dimensions;
-  if (!dims) return 0;
-  return (units / dims.distance) * dims.size;
-}
-
-function centerFromTopLeft(tokenDoc, x, y) {
-  const sizePx = canvas?.dimensions?.size ?? 100;
-  const wPx = (tokenDoc.width ?? 1) * sizePx;
-  const hPx = (tokenDoc.height ?? 1) * sizePx;
-  return { x: x + wPx / 2, y: y + hPx / 2, wPx, hPx };
-}
-
-function documentCenterPx(tokenDoc) {
-  return centerFromTopLeft(tokenDoc, tokenDoc.x ?? 0, tokenDoc.y ?? 0);
-}
-
-function gridDistanceUnits(p1, p2) {
-  if (!canvas?.grid?.measureDistance) return 0;
-  return canvas.grid.measureDistance(p1, p2);
+function getSetting(key, fallback) {
+  try { return game.settings.get(MODULE_ID, key); } catch { return fallback; }
 }
 
 function escapeHtml(str) {
-  try {
-    if (typeof foundry?.utils?.escapeHTML === "function") return foundry.utils.escapeHTML(String(str ?? ""));
-  } catch {}
-  try {
-    if (typeof Handlebars?.escapeExpression === "function") return Handlebars.escapeExpression(String(str ?? ""));
-  } catch {}
   const div = document.createElement("div");
   div.appendChild(document.createTextNode(String(str ?? "")));
   return div.innerHTML;
 }
 
+/** Scene dimensions work for scenes that are not currently viewed, canvas.dimensions does not. */
+function gridSizePx(scene) { return scene?.dimensions?.size ?? canvas?.dimensions?.size ?? 100; }
+function gridDistanceUnits(scene) { return scene?.dimensions?.distance ?? canvas?.dimensions?.distance ?? 5; }
+
+function unitsToPixels(units, scene) {
+  return (units / gridDistanceUnits(scene)) * gridSizePx(scene);
+}
+
+function tokenSizePx(tokenDoc, scene) {
+  const size = gridSizePx(scene);
+  return { w: (tokenDoc.width ?? 1) * size, h: (tokenDoc.height ?? 1) * size };
+}
+
+/** Center of a token, optionally at a hypothetical top-left (x, y). */
+function tokenCenter(tokenDoc, scene, x = tokenDoc.x ?? 0, y = tokenDoc.y ?? 0) {
+  const { w, h } = tokenSizePx(tokenDoc, scene);
+  return { x: x + w / 2, y: y + h / 2 };
+}
+
+/** Move `point` onto the circle of `radiusPx` around `anchor` if it lies outside it. */
+function clampToRadius(point, anchor, radiusPx) {
+  const dx = point.x - anchor.x;
+  const dy = point.y - anchor.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist <= radiusPx + 1e-6 || dist < 1e-6) return point;
+  const t = radiusPx / dist;
+  return { x: anchor.x + dx * t, y: anchor.y + dy * t };
+}
+
 /* ---------- Flag helpers ---------- */
 function getLeashFlag(doc) {
-  try { return doc?.getFlag(MODULE_ID, "leash"); } catch (e) { return undefined; }
+  try { return doc?.getFlag(MODULE_ID, "leash"); } catch { return undefined; }
 }
 async function setLeashFlag(doc, value) {
   try { return await doc.setFlag(MODULE_ID, "leash", value); } catch (e) { console.warn(`${MODULE_ID} | setFlag failed`, e); }
@@ -61,103 +69,107 @@ async function setLeashFlag(doc, value) {
 async function unsetLeashFlag(doc) {
   try { return await doc.unsetFlag(MODULE_ID, "leash"); } catch (e) { console.warn(`${MODULE_ID} | unsetFlag failed`, e); }
 }
-function safeScopeGetFlag(scope, doc, key) {
-  try { return doc?.getFlag(scope, key); } catch (e) { return undefined; }
-}
 
-/* ---------- Settings registration (only once at init) ---------- */
+/* ---------- Settings ---------- */
 Hooks.once("init", () => {
-  if (__colys_inited) return;
-  __colys_inited = true;
-  console.log(`${MODULE_ID} | init: registering settings`);
+  game.settings.register(MODULE_ID, "defaultDistance", {
+    name: "Default Leash Distance",
+    hint: "Default leash radius in scene units when applying a leash.",
+    scope: "world",
+    config: true,
+    type: Number,
+    default: 5
+  });
 
-  try {
-    game.settings.register(MODULE_ID, "defaultDistance", {
-      name: "Default Leash Distance",
-      hint: "Default leash radius in scene units when applying a leash.",
-      scope: "world",
-      config: true,
-      type: Number,
-      default: 5
-    });
-  } catch (e) {}
+  game.settings.register(MODULE_ID, "exceedBehavior", {
+    name: "Leashed Token Movement Beyond Radius",
+    hint: "Block movement or clamp to boundary when a token tries to exceed leash.",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: { block: "Block", clamp: "Clamp" },
+    default: "block"
+  });
 
-  try {
-    game.settings.register(MODULE_ID, "exceedBehavior", {
-      name: "Leashed Token Movement Beyond Radius",
-      hint: "Block movement or clamp to boundary when a token tries to exceed leash.",
-      scope: "world",
-      config: true,
-      type: String,
-      choices: { block: "Block", clamp: "Clamp" },
-      default: "block"
-    });
-  } catch (e) {}
+  game.settings.register(MODULE_ID, "gmOnly", {
+    name: "GM Only",
+    hint: "If enabled, only GMs may apply or remove leashes.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: true
+  });
 
-  try {
-    game.settings.register(MODULE_ID, "gmOnly", {
-      name: "GM Only",
-      hint: "If enabled, only GMs may apply or remove leashes.",
-      scope: "world",
-      config: true,
-      type: Boolean,
-      default: true
-    });
-  } catch (e) {}
+  game.settings.register(MODULE_ID, "ringVisibility", {
+    name: "Leash Ring Visibility",
+    hint: "When to display the leash ring around the handler.",
+    scope: "client",
+    config: true,
+    type: String,
+    choices: { hover: "On hover or control (default)", always: "Always show when a leash exists", never: "Never show" },
+    default: "hover"
+  });
 
-  try {
-    game.settings.register(MODULE_ID, "ringVisibility", {
-      name: "Leash Ring Visibility",
-      hint: "When to display the leash ring around the handler.",
-      scope: "client",
-      config: true,
-      type: String,
-      choices: { hover: "On hover or control (default)", always: "Always show when a leash exists", never: "Never show" },
-      default: "hover"
-    });
-  } catch (e) {}
-
-  try {
-    game.settings.register(MODULE_ID, "handlerPullMode", {
-      name: "Handler Movement Pull Mode",
-      hint: "How the leashed token responds when the handler moves.",
-      scope: "world",
-      config: true,
-      type: String,
-      choices: { drag: "Drag by the same delta, then clamp", clamp: "Do not drag; only clamp if outside after handler moves" },
-      default: "drag"
-    });
-  } catch (e) {}
+  game.settings.register(MODULE_ID, "handlerPullMode", {
+    name: "Handler Movement Pull Mode",
+    hint: "How the leashed token responds when the handler moves.",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: { drag: "Drag by the same delta, then clamp", clamp: "Do not drag; only clamp if outside after handler moves" },
+    default: "drag"
+  });
 });
 
-/* ---------- Register all game hooks at ready ---------- */
+/* ---------- Hooks ---------- */
 Hooks.once("ready", () => {
-  if (__colys_hooks_registered) return;
-  __colys_hooks_registered = true;
-  console.log(`${MODULE_ID} | ready: registering hooks`);
-
-  // Internal state
-  const _internalUpdating = new Set();
-  const _lastDelta = new Map();
-  const _moveSessions = new Map();
+  // Last known top-left position of every token we have seen, so a move's delta never depends on timers.
+  const _lastPos = new Map();
+  // Context for updates we issue ourselves (also passed via update options; this is the fallback if options are dropped).
+  const _internal = new Map();
   const _rings = new Map();
+  let _pullQueue = Promise.resolve();
 
-  function ringKey(handlerId, targetId) { return `${handlerId}:${targetId}`; }
+  function seedPositions(scene = canvas?.scene) {
+    if (!scene) return;
+    for (const td of scene.tokens) _lastPos.set(td.id, { x: td.x, y: td.y });
+  }
+
+  /** Context describing an update that this module issued, or undefined for a normal user/other-module update. */
+  function internalContext(tokenDoc, options) {
+    return options?.[MODULE_ID]?.internal ? options[MODULE_ID] : _internal.get(tokenDoc.id);
+  }
+
+  /* ----- Rings ----- */
+  const ringKey = (handlerId, targetId) => `${handlerId}:${targetId}`;
+
+  function drawRing(gfx, center, radius) {
+    gfx.clear();
+    if (typeof gfx.circle === "function" && typeof gfx.stroke === "function") {
+      // PIXI v8 style
+      gfx.circle(center.x, center.y, radius)
+        .fill({ color: RING_COLOR, alpha: 0.06 })
+        .stroke({ width: 3, color: RING_COLOR, alpha: 0.9 });
+    } else {
+      // PIXI v7 style
+      gfx.lineStyle(3, RING_COLOR, 0.9);
+      gfx.beginFill(RING_COLOR, 0.06);
+      gfx.drawCircle(center.x, center.y, radius);
+      gfx.endFill();
+    }
+  }
 
   function showRingForPair(handlerDoc, targetDoc, distance) {
     try {
       const key = ringKey(handlerDoc.id, targetDoc.id);
       if (_rings.has(key)) return;
-      const graphics = new PIXI.Graphics();
-      graphics.zIndex = 1000;
-      graphics.lineStyle(3, 0x4caf50, 0.9);
-      graphics.beginFill(0x4caf50, 0.06);
-      const radius = unitsToPixels(distance);
-      const handlerCenter = documentCenterPx(handlerDoc);
-      graphics.drawCircle(handlerCenter.x, handlerCenter.y, radius);
-      graphics.endFill();
-      _rings.set(key, graphics);
-      canvas.primary.addChild(graphics);
+      const scene = handlerDoc.parent;
+      const gfx = new PIXI.Graphics();
+      gfx.zIndex = 1000;
+      gfx.eventMode = "none";
+      drawRing(gfx, tokenCenter(handlerDoc, scene), unitsToPixels(distance, scene));
+      _rings.set(key, gfx);
+      canvas.primary.addChild(gfx);
     } catch (err) { console.error(`${MODULE_ID} | showRingForPair error`, err); }
   }
 
@@ -169,420 +181,265 @@ Hooks.once("ready", () => {
     _rings.delete(key);
   }
 
-  function updateRingPosition(handlerId, targetId, handlerCenter, distance) {
-    const key = ringKey(handlerId, targetId);
-    const gfx = _rings.get(key);
+  function updateRingPosition(scene, handlerId, targetId, handlerCenter, distance) {
+    const gfx = _rings.get(ringKey(handlerId, targetId));
     if (!gfx) return;
-    try {
-      gfx.clear();
-      gfx.lineStyle(3, 0x4caf50, 0.9);
-      gfx.beginFill(0x4caf50, 0.06);
-      const radius = unitsToPixels(distance);
-      gfx.drawCircle(handlerCenter.x, handlerCenter.y, radius);
-      gfx.endFill();
-    } catch (err) { console.error(`${MODULE_ID} | updateRingPosition error`, err); }
+    try { drawRing(gfx, handlerCenter, unitsToPixels(distance, scene)); }
+    catch (err) { console.error(`${MODULE_ID} | updateRingPosition error`, err); }
   }
 
-  function openLeashDialog(targetDoc) {
-    let defaultDistance = 5;
-    try { defaultDistance = game.settings.get(MODULE_ID, "defaultDistance"); } catch {}
-    const handlerOptions = canvas.tokens.placeables
-      .filter(t => t.document.id !== targetDoc.id)
-      .map(t => ({ id: t.document.id, name: t.document.name || t.document.actor?.name || t.id }));
+  /* ----- Apply-leash dialog ----- */
+  async function openLeashDialog(targetDoc) {
+    const scene = targetDoc.parent;
+    const DialogV2 = foundry.applications?.api?.DialogV2;
+    if (!DialogV2) return ui.notifications.error("Colys Leash needs Foundry v12 or newer.");
 
+    const defaultDistance = getSetting("defaultDistance", 5);
+    const handlerOptions = scene.tokens
+      .filter(t => t.id !== targetDoc.id)
+      .map(t => ({ id: t.id, name: t.name || t.actor?.name || t.id }));
     if (handlerOptions.length === 0) return ui.notifications.warn("No other tokens on the scene to leash to.");
 
     const optionsHtml = handlerOptions.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("");
-    const unitsName = canvas.scene.grid.units || "units";
+    const unitsName = scene.grid?.units || "units";
     const content = `
-      <form class="${MODULE_ID}-form">
-        <div class="form-group">
-          <label>Handler Token</label>
-          <select name="handlerId">${optionsHtml}</select>
-        </div>
-        <div class="form-group">
-          <label>Leash Distance (${unitsName})</label>
-          <input type="number" name="distance" min="0" step="1" value="${defaultDistance}">
-        </div>
-      </form>
-    `;
+      <div class="form-group">
+        <label>Handler Token</label>
+        <select name="handlerId">${optionsHtml}</select>
+      </div>
+      <div class="form-group">
+        <label>Leash Distance (${escapeHtml(unitsName)})</label>
+        <input type="number" name="distance" min="0" step="1" value="${Number(defaultDistance) || 5}">
+      </div>`;
 
-    new Dialog({
-      title: "Apply Leash",
+    const result = await DialogV2.prompt({
+      window: { title: "Apply Leash" },
       content,
-      buttons: {
-        apply: {
-          icon: '<i class="fas fa-link"></i>',
-          label: "Apply",
-          callback: async (html) => {
-            const handlerId = html.find('[name="handlerId"]').val();
-            const distance = parseFloat(html.find('[name="distance"]').val());
-            if (!handlerId || isNaN(distance) || distance <= 0) return ui.notifications.warn("Choose a handler and a positive distance.");
-            const scene = targetDoc.parent;
-            const handlerDoc = scene.tokens.get(handlerId);
-            if (!handlerDoc) return ui.notifications.error("Handler token not found.");
-
-            await setLeashFlag(targetDoc, { handlerId: handlerDoc.id, sceneId: scene.id, distance });
-            ui.notifications.info(`Leashed ${targetDoc.name ?? "Token"} to ${handlerDoc.name ?? "Handler"} at ${distance} ${unitsName}.`);
-            try { if (game.settings.get(MODULE_ID, "ringVisibility") === "always") showRingForPair(handlerDoc, targetDoc, distance); } catch {}
-          }
-        },
-        cancel: { label: "Cancel" }
+      ok: {
+        label: "Apply",
+        icon: "fa-solid fa-link",
+        callback: (event, button) => ({
+          handlerId: button.form.elements.handlerId.value,
+          distance: parseFloat(button.form.elements.distance.value)
+        })
       },
-      default: "apply"
-    }).render(true);
+      rejectClose: false
+    });
+    if (!result) return;
+
+    const { handlerId, distance } = result;
+    if (!handlerId || isNaN(distance) || distance <= 0) return ui.notifications.warn("Choose a handler and a positive distance.");
+    const handlerDoc = scene.tokens.get(handlerId);
+    if (!handlerDoc) return ui.notifications.error("Handler token not found.");
+
+    await setLeashFlag(targetDoc, { handlerId: handlerDoc.id, sceneId: scene.id, distance });
+    ui.notifications.info(`Leashed ${targetDoc.name ?? "Token"} to ${handlerDoc.name ?? "Handler"} at ${distance} ${unitsName}.`);
+    if (getSetting("ringVisibility", "hover") === "always") showRingForPair(handlerDoc, targetDoc, distance);
   }
 
-  // HUD Hook
+  /* ----- Token HUD button (HTMLElement in v13+, jQuery in v12) ----- */
   Hooks.on("renderTokenHUD", (hud, html) => {
     try {
+      const root = html instanceof HTMLElement ? html : html?.[0];
       const tokenDoc = hud?.object?.document;
-      if (!tokenDoc) return;
+      if (!root || !tokenDoc) return;
+      if (getSetting("gmOnly", true) && !game.user.isGM) return;
 
-      let gmOnly = true;
-      try { gmOnly = game.settings.get(MODULE_ID, "gmOnly"); } catch (e) { gmOnly = true; }
-      if (gmOnly && !game.user.isGM) return;
-
-      let container = html.find(".left");
-      if (!container || container.length === 0) container = html.find(".token-control.left");
-      if (!container || container.length === 0) container = html;
-
+      root.querySelectorAll("[data-colys-leash]").forEach(el => el.remove()); // HUD re-renders
+      const column = root.querySelector(".col.left") ?? root.querySelector(".left") ?? root;
       const leashData = getLeashFlag(tokenDoc);
 
-      if (!leashData) {
-        const btn = $(`<div class="control-icon" data-action="colys-leash" title="Leash"><i class="fas fa-link"></i></div>`);
-        btn.on("click", (ev) => { ev.stopPropagation?.(); openLeashDialog(tokenDoc); });
-        container.append(btn);
-      } else {
-        const btn = $(`<div class="control-icon" data-action="colys-unleash" title="Unleash"><i class="fas fa-unlink"></i></div>`);
-        btn.on("click", async (ev) => {
-          ev.stopPropagation?.();
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "control-icon";
+      btn.dataset.colysLeash = leashData ? "unleash" : "leash";
+      btn.title = leashData ? "Unleash" : "Leash";
+      btn.innerHTML = `<i class="fas ${leashData ? "fa-unlink" : "fa-link"}"></i>`;
+      btn.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (leashData) {
           await unsetLeashFlag(tokenDoc);
           removeRingForPair(leashData.handlerId, tokenDoc.id);
           ui.notifications.info(`Unleashed ${tokenDoc.name ?? "Token"}.`);
-        });
-        container.append(btn);
-      }
+        } else {
+          openLeashDialog(tokenDoc);
+        }
+      });
+      column.append(btn);
     } catch (err) {
       console.warn(`${MODULE_ID} | renderTokenHUD error`, err);
     }
   });
 
-  // Movement enforcement: preUpdateToken
-  Hooks.on("preUpdateToken", (tokenDoc, update, options = {}, userId) => {
-    if (_internalUpdating.has(tokenDoc.id)) return;
+  /* ----- Enforce the leash when the *leashed* token is moved ----- */
+  Hooks.on("preUpdateToken", (tokenDoc, update, options) => {
     if (update.x === undefined && update.y === undefined) return;
+    // Remember where this token was before the move (tokenDoc still holds the old position here).
+    if (!_lastPos.has(tokenDoc.id)) _lastPos.set(tokenDoc.id, { x: tokenDoc.x, y: tokenDoc.y });
+
+    if (internalContext(tokenDoc, options)) return; // our own pull is already clamped
 
     const leashData = getLeashFlag(tokenDoc);
-    if (!leashData || !leashData.handlerId) return;
-
+    if (!leashData?.handlerId) return;
     const scene = tokenDoc.parent;
-    if (!scene || leashData.sceneId !== scene.id) return;
+    if (!scene || (leashData.sceneId && leashData.sceneId !== scene.id)) return;
     const handlerDoc = scene.tokens.get(leashData.handlerId);
     if (!handlerDoc) return;
 
-    const newX = update.x ?? tokenDoc.x;
-    const newY = update.y ?? tokenDoc.y;
-    const targetCenter = centerFromTopLeft(tokenDoc, newX, newY);
-    const handlerCenter = documentCenterPx(handlerDoc);
-    const maxUnits = leashData.distance;
+    const { w, h } = tokenSizePx(tokenDoc, scene);
+    const targetCenter = tokenCenter(tokenDoc, scene, update.x ?? tokenDoc.x, update.y ?? tokenDoc.y);
+    const handlerCenter = tokenCenter(handlerDoc, scene);
+    const radiusPx = unitsToPixels(leashData.distance, scene);
 
-    const radiusPx = unitsToPixels(maxUnits);
-    const dx = targetCenter.x - handlerCenter.x;
-    const dy = targetCenter.y - handlerCenter.y;
-    const distPx = Math.hypot(dx, dy);
+    if (Math.hypot(targetCenter.x - handlerCenter.x, targetCenter.y - handlerCenter.y) <= radiusPx + 1e-6) return;
+    if (getSetting("exceedBehavior", "block") === "block") return false;
 
-    // Ensure the leashed token is updated based on the handler's current position
-    if (distPx <= radiusPx) return;
-
-    let behavior = "block";
-    try { behavior = game.settings.get(MODULE_ID, "exceedBehavior"); } catch {}
-    if (behavior === "block") {
-        return false;
-    }
-
-    const t = (radiusPx / distPx) || 0;
-    const clampedCenter = { x: handlerCenter.x + dx * t, y: handlerCenter.y + dy * t };
-    update.x = clampedCenter.x - targetCenter.wPx / 2;
-    update.y = clampedCenter.y - targetCenter.hPx / 2;
-});
-
-  // Session tracking: record delta and start session for handlers
-  Hooks.on("preUpdateToken", (tokenDoc, update) => {
-    if (update.x === undefined && update.y === undefined) return;
-    const dx = (update.x ?? tokenDoc.x) - tokenDoc.x;
-    const dy = (update.y ?? tokenDoc.y) - tokenDoc.y;
-    _lastDelta.set(tokenDoc.id, { dx, dy, t: Date.now() });
-
-    const scene = tokenDoc.parent;
-    if (!scene) return;
-
-    const hasLeashed = scene.tokens.some(td => {
-      const leash = getLeashFlag(td);
-      return leash && leash.handlerId === tokenDoc.id;
-    });
-    if (!hasLeashed) return;
-
-    const existing = _moveSessions.get(tokenDoc.id);
-    if (!existing) {
-      const startHandlerC = documentCenterPx(tokenDoc);
-      const originalCenters = new Map();
-      for (const td of scene.tokens) {
-        const leash = getLeashFlag(td);
-        if (!leash || leash.handlerId !== tokenDoc.id) continue;
-        originalCenters.set(td.id, documentCenterPx(td));
-      }
-      _moveSessions.set(tokenDoc.id, { startHandlerC, originalCenters, last: Date.now() });
-    } else {
-      existing.last = Date.now();
-    }
+    const clamped = clampToRadius(targetCenter, handlerCenter, radiusPx);
+    update.x = clamped.x - w / 2;
+    update.y = clamped.y - h / 2;
   });
 
-  // Handler auto-pull: apply movement to leashed tokens
-  function clearStaleSessions(timeout = 300) {
-    const now = Date.now();
-    for (const [id, s] of _moveSessions) {
-      if ((now - (s.last || 0)) > timeout) _moveSessions.delete(id);
-    }
-  }
-
-  // Track previous handler positions (MOVED OUTSIDE updateToken hook)
-  const _prevHandlerPos = new Map();
-
-  Hooks.on("updateToken", async (tokenDoc, changes) => {
-    const delta = _lastDelta.get(tokenDoc.id);
-    _lastDelta.delete(tokenDoc.id);
-
-    const session = _moveSessions.get(tokenDoc.id);
-    if (session) session.last = Date.now();
-
-    if (!delta && !session) return;
-
-    const scene = tokenDoc.parent;
+  /* ----- Pull followers when the *handler* moves ----- */
+  async function runPull({ sceneId, handlerId, handlerCenter, dx, dy, visited }) {
+    const scene = game.scenes.get(sceneId);
     if (!scene) return;
-
-    const handlerDoc = tokenDoc;
-    const handlerCenterNow = documentCenterPx(handlerDoc);
-    
-    // Initialize previous position on first move (use delta if available)
-    let prevHandlerPos = _prevHandlerPos.get(handlerDoc.id);
-    if (!prevHandlerPos && delta) {
-      // First move: calculate previous position from the delta
-      prevHandlerPos = { x: handlerCenterNow.x - delta.dx, y: handlerCenterNow.y - delta.dy };
-    } else if (!prevHandlerPos) {
-      // No delta and no previous position: use current
-      prevHandlerPos = { x: handlerCenterNow.x, y: handlerCenterNow.y };
-    }
-    
-    // Store current position for next update (ONLY x and y, not wPx/hPx)
-    _prevHandlerPos.set(handlerDoc.id, { x: handlerCenterNow.x, y: handlerCenterNow.y });
-
+    const mode = getSetting("handlerPullMode", "drag");
     const updates = [];
 
     for (const td of scene.tokens) {
-        const leash = getLeashFlag(td);
-        if (!leash || leash.handlerId !== handlerDoc.id) continue;
+      const leash = getLeashFlag(td);
+      if (!leash || leash.handlerId !== handlerId) continue;
+      if (leash.sceneId && leash.sceneId !== scene.id) continue;
+      if (visited.includes(td.id)) continue; // never pull a token already moved in this chain (mutual leashes)
 
-        const maxUnits = leash.distance;
-        const sizePx = canvas.dimensions.size;
-        const wPx = (td.width ?? 1) * sizePx, hPx = (td.height ?? 1) * sizePx;
+      // Read the follower's position *now*, not from some earlier snapshot.
+      const current = tokenCenter(td, scene);
+      const wanted = mode === "drag" ? { x: current.x + dx, y: current.y + dy } : current;
+      const final = clampToRadius(wanted, handlerCenter, unitsToPixels(leash.distance, scene));
 
-        // Get current leashed token center
-        const currentCenter = documentCenterPx(td);
+      const { w, h } = tokenSizePx(td, scene);
+      const x = final.x - w / 2;
+      const y = final.y - h / 2;
+      dbg(`pull ${td.id}: (${td.x},${td.y}) -> (${x},${y}) [handler delta ${dx},${dy}, mode ${mode}]`);
+      if (Math.abs(x - td.x) < 0.01 && Math.abs(y - td.y) < 0.01) continue;
+      updates.push({ _id: td.id, x, y });
+    }
+    if (!updates.length) return;
 
-        // Decide base center and displacement. If a move *session* exists (handler started a drag),
-        // use the original center captured at session start so large/fast handler moves apply the
-        // full displacement. Otherwise fall back to incremental delta using _prevHandlerPos.
-        const sessionForHandler = _moveSessions.get(handlerDoc.id);
+    const context = { internal: true, visited: [...visited, ...updates.map(u => u._id)] };
+    for (const u of updates) _internal.set(u._id, context);
+    try {
+      await scene.updateEmbeddedDocuments("Token", updates, { [MODULE_ID]: context });
+    } finally {
+      for (const u of updates) if (_internal.get(u._id) === context) _internal.delete(u._id);
+    }
+  }
 
-        let baseCenter = currentCenter;
-        if (sessionForHandler && sessionForHandler.originalCenters && sessionForHandler.originalCenters.has(td.id)) {
-          baseCenter = sessionForHandler.originalCenters.get(td.id);
-        }
+  Hooks.on("updateToken", (tokenDoc, changes, options, userId) => {
+    if (changes.x === undefined && changes.y === undefined) return;
+    const scene = tokenDoc.parent;
+    if (!scene) return;
 
-        let dispX, dispY;
-        // Compute both possible displacements: session-based (since drag started) and
-        // incremental (since previous update). Choose the one with larger magnitude —
-        // this avoids stale or zeroed session origins accidentally nullifying movement.
-        let dispSessionX = 0, dispSessionY = 0;
-        if (sessionForHandler && sessionForHandler.startHandlerC) {
-          dispSessionX = handlerCenterNow.x - sessionForHandler.startHandlerC.x;
-          dispSessionY = handlerCenterNow.y - sessionForHandler.startHandlerC.y;
-        }
-        const dispPrevX = prevHandlerPos ? (handlerCenterNow.x - prevHandlerPos.x) : 0;
-        const dispPrevY = prevHandlerPos ? (handlerCenterNow.y - prevHandlerPos.y) : 0;
+    // Bookkeeping runs on every client so everyone agrees on where tokens last were.
+    const now = { x: tokenDoc.x, y: tokenDoc.y };
+    const prev = _lastPos.get(tokenDoc.id);
+    _lastPos.set(tokenDoc.id, now);
 
-        // Choose which displacement to apply (session wins if its magnitude is >= prev magnitude)
-        const magSession = Math.hypot(dispSessionX, dispSessionY);
-        const magPrev = Math.hypot(dispPrevX, dispPrevY);
+    const followers = scene.tokens.filter(td => {
+      const leash = getLeashFlag(td);
+      return leash?.handlerId === tokenDoc.id && (!leash.sceneId || leash.sceneId === scene.id);
+    });
+    if (!followers.length) return;
 
-        // Optional debug: print candidate magnitudes and flags
-        try {
-          if (typeof window !== "undefined" && window.colysLeashDebug) {
-            const hasSession = !!(sessionForHandler && sessionForHandler.originalCenters && sessionForHandler.originalCenters.has(td.id));
-            console.log(`${MODULE_ID} | Candidate mags: magSession=${magSession}, magPrev=${magPrev}, hasSessionForToken=${hasSession}`);
-            if (hasSession) console.log(`${MODULE_ID} | session.startHandlerC=`, sessionForHandler.startHandlerC, " originalCenter=", sessionForHandler.originalCenters.get(td.id));
-            console.log(`${MODULE_ID} | prevHandlerPos=`, prevHandlerPos, " handlerCenterNow=", handlerCenterNow);
-          }
-        } catch (e) {}
+    const handlerCenter = tokenCenter(tokenDoc, scene);
 
-        if (magSession >= magPrev && magSession > 1e-6 && sessionForHandler && sessionForHandler.originalCenters && sessionForHandler.originalCenters.has(td.id)) {
-          dispX = dispSessionX;
-          dispY = dispSessionY;
-          baseCenter = sessionForHandler.originalCenters.get(td.id);
-        } else {
-          dispX = dispPrevX;
-          dispY = dispPrevY;
-          baseCenter = currentCenter;
-        }
-
-        try {
-          if (typeof window !== "undefined" && window.colysLeashDebug) {
-            console.log(`${MODULE_ID} | Chosen disp: dx=${dispX}, dy=${dispY}, baseCenter=`, baseCenter);
-          }
-        } catch (e) {}
-
-        let proposedCenter = {
-          x: baseCenter.x + dispX,
-          y: baseCenter.y + dispY
-        };
-
-        // If the chosen proposed center produced no movement (equals current center)
-        // but the handler did move since the previous recorded position, fall back
-        // to applying the incremental delta to the current center. This avoids
-        // silently ignoring handler movement when session origins are stale.
-        try {
-          if (prevHandlerPos && Math.abs(proposedCenter.x - currentCenter.x) < 1e-6 && Math.abs(proposedCenter.y - currentCenter.y) < 1e-6
-              && (prevHandlerPos.x !== handlerCenterNow.x || prevHandlerPos.y !== handlerCenterNow.y)) {
-            proposedCenter = { x: currentCenter.x + (handlerCenterNow.x - prevHandlerPos.x), y: currentCenter.y + (handlerCenterNow.y - prevHandlerPos.y) };
-            // update dispX/dispY for logging
-            dispX = proposedCenter.x - baseCenter.x;
-            dispY = proposedCenter.y - baseCenter.y;
-            if (typeof window !== "undefined" && window.colysLeashDebug) console.log(`${MODULE_ID} | Fallback applied: proposedCenter now=`, proposedCenter);
-          }
-        } catch (e) {}
-
-        // Clamp to radius around handler's NEW position
-        const radiusPx = unitsToPixels(maxUnits);
-        const ddx = proposedCenter.x - handlerCenterNow.x;
-        const ddy = proposedCenter.y - handlerCenterNow.y;
-        const distPx = Math.hypot(ddx, ddy);
-
-        let finalCenter = proposedCenter;
-        if (distPx > radiusPx && distPx > 1e-6) {
-            const t = radiusPx / distPx;
-            finalCenter = { x: handlerCenterNow.x + ddx * t, y: handlerCenterNow.y + ddy * t };
-        }
-
-        updates.push({ _id: td.id, x: finalCenter.x - wPx / 2, y: finalCenter.y - hPx / 2 });
-
-        // Optional debug output (enable by setting `window.colysLeashDebug = true` in the Foundry console)
-        try {
-          if (typeof window !== "undefined" && window.colysLeashDebug) {
-            console.log(`${MODULE_ID} | Handler disp: dx=${dispX}, dy=${dispY}, prevPos: `, prevHandlerPos, " currentPos: ", handlerCenterNow);
-            console.log(`${MODULE_ID} | Leashed token ${td.id}: current=${currentCenter.x},${currentCenter.y} -> proposed=${proposedCenter.x},${proposedCenter.y} -> final=${finalCenter.x},${finalCenter.y} radius=${radiusPx}`);
-          }
-        } catch (e) {}
-
-        updateRingPosition(leash.handlerId, td.id, handlerCenterNow, maxUnits);
+    // Rings are client-side graphics, so every client keeps them in step.
+    if (scene.id === canvas?.scene?.id) {
+      for (const td of followers) updateRingPosition(scene, tokenDoc.id, td.id, handlerCenter, getLeashFlag(td).distance);
     }
 
-    if (updates.length) {
-        for (const u of updates) _internalUpdating.add(u._id);
-        try {
-            await scene.updateEmbeddedDocuments("Token", updates, { render: true });
-        } finally {
-            for (const u of updates) _internalUpdating.delete(u._id);
-        }
-    }
+    // Exactly one client performs the pull: the active GM, or the mover if no GM is connected.
+    const activeGM = game.users?.activeGM;
+    const iAmPuller = activeGM ? activeGM.id === game.user.id : userId === game.user.id;
+    if (!iAmPuller) return;
 
-    clearStaleSessions(250);
+    const dx = prev ? now.x - prev.x : 0;
+    const dy = prev ? now.y - prev.y : 0;
+    const context = internalContext(tokenDoc, options);
+    const visited = [...(context?.visited ?? []), tokenDoc.id];
+    dbg(`handler ${tokenDoc.id} moved by (${dx},${dy}); ${followers.length} follower(s)`);
+
+    _pullQueue = _pullQueue
+      .then(() => runPull({ sceneId: scene.id, handlerId: tokenDoc.id, handlerCenter, dx, dy, visited }))
+      .catch(err => console.error(`${MODULE_ID} | pull failed`, err));
   });
 
-  // Ring visibility: hover
+  /* ----- Ring visibility ----- */
   Hooks.on("hoverToken", (token, hovered) => {
     try {
-      let vis = "hover";
-      try { vis = game.settings.get(MODULE_ID, "ringVisibility"); } catch {}
-      if (vis === "never") return;
-
+      const vis = getSetting("ringVisibility", "hover");
+      if (vis === "never" || vis === "always") return;
       const tokenDoc = token?.document;
-      if (!tokenDoc) return;
-      if (vis === "always") return;
-
-      const scene = tokenDoc.parent;
+      const scene = tokenDoc?.parent;
       if (!scene) return;
-
-      if (!hovered) {
-        for (const td of scene.tokens) {
-          const leash = getLeashFlag(td);
-          if (!leash) continue;
-          if (leash.handlerId === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
-          if (tokenDoc.id === td.id && leash) removeRingForPair(leash.handlerId, td.id);
-        }
-        return;
-      }
 
       for (const td of scene.tokens) {
         const leash = getLeashFlag(td);
         if (!leash) continue;
+        const involved = tokenDoc.id === leash.handlerId || tokenDoc.id === td.id;
+        if (!involved) continue;
+        if (!hovered) { removeRingForPair(leash.handlerId, td.id); continue; }
         const handlerDoc = scene.tokens.get(leash.handlerId);
-        if (!handlerDoc) continue;
-        if (tokenDoc.id === leash.handlerId || tokenDoc.id === td.id) showRingForPair(handlerDoc, td, leash.distance);
+        if (handlerDoc) showRingForPair(handlerDoc, td, leash.distance);
       }
     } catch (err) {
       console.warn(`${MODULE_ID} | hoverToken handler error`, err);
     }
   });
 
-  // Ring visibility: control
   Hooks.on("controlToken", (token, controlled) => {
     try {
-      let vis = "hover";
-      try { vis = game.settings.get(MODULE_ID, "ringVisibility"); } catch {}
+      const vis = getSetting("ringVisibility", "hover");
       if (vis === "never") return;
-
-      const tokenDoc = token?.document;
-      if (!tokenDoc) return;
-
-      const scene = tokenDoc.parent;
+      const scene = token?.document?.parent;
       if (!scene) return;
-
-      if (!controlled && vis !== "always") {
-        for (const td of scene.tokens) {
-          const leash = getLeashFlag(td);
-          if (!leash) continue;
-          removeRingForPair(leash.handlerId, td.id);
-        }
-        return;
-      }
+      const tokenId = token.document.id;
 
       for (const td of scene.tokens) {
         const leash = getLeashFlag(td);
         if (!leash) continue;
+        if (!controlled && vis !== "always") { removeRingForPair(leash.handlerId, td.id); continue; }
         const handlerDoc = scene.tokens.get(leash.handlerId);
-        if (!handlerDoc) continue;
-        if (tokenDoc.id === leash.handlerId || tokenDoc.id === td.id || vis === "always") showRingForPair(handlerDoc, td, leash.distance);
+        if (handlerDoc && (tokenId === leash.handlerId || tokenId === td.id || vis === "always")) showRingForPair(handlerDoc, td, leash.distance);
       }
     } catch (err) {
       console.warn(`${MODULE_ID} | controlToken handler error`, err);
     }
   });
 
-  // Cleanup
-  Hooks.on("canvasReady", () => { for (const [, gfx] of _rings) { try { gfx.destroy(true); } catch {} } _rings.clear(); });
+  /* ----- Housekeeping ----- */
+  Hooks.on("canvasReady", () => {
+    for (const [, gfx] of _rings) { try { gfx.destroy(true); } catch {} }
+    _rings.clear();
+    seedPositions();
+  });
+  Hooks.on("createToken", (tokenDoc) => _lastPos.set(tokenDoc.id, { x: tokenDoc.x, y: tokenDoc.y }));
   Hooks.on("deleteToken", (tokenDoc) => {
+    _lastPos.delete(tokenDoc.id);
     const scene = tokenDoc.parent;
     if (!scene) return;
     for (const td of scene.tokens) {
       const leash = getLeashFlag(td);
       if (!leash) continue;
-      if (leash.handlerId === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
-      if (td.id === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
+      if (leash.handlerId === tokenDoc.id || td.id === tokenDoc.id) removeRingForPair(leash.handlerId, td.id);
     }
   });
 
-  // Expose API
+  // canvasReady may already have fired before "ready" on first load.
+  if (canvas?.ready) seedPositions();
+
+  /* ----- Public API ----- */
   const mod = game.modules.get(MODULE_ID);
   if (mod) {
     mod.api = {
@@ -593,5 +450,4 @@ Hooks.once("ready", () => {
   }
 });
 
-/* ---------- Load-time log ---------- */
 console.log(`${MODULE_ID} | leash.js loaded`);

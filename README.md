@@ -3,7 +3,7 @@
 
 This is somewhat functional, but is still a work in progress. 
 
-Leash a token to a handler with adjustable distance; grid-based measurement (PF2E square grid), handler auto-follow (Drag mode by default), and a visual leash ring.
+Leash a token to a handler with adjustable distance; handler auto-follow (Drag mode by default), and a visual leash ring. Works with Foundry v12 through v14.
 
 ## Install (Manual)
 1. Download `colys-leash.zip`.
@@ -23,9 +23,12 @@ Leash a token to a handler with adjustable distance; grid-based measurement (PF2
 - **Handler Pull Mode** — Drag (default) or Clamp.
 
 ## Notes
-- Distance uses `canvas.grid.measureDistance` (grid-aware, diagonal rules respected).
-- Handler movement in **Drag** mode pulls the leashed token by the same delta, then clamps to boundary if needed.
+- The leash is a circle: the radius is the distance converted to pixels, measured center to center (it is not grid-path measured).
+- Handler movement in **Drag** mode pulls the leashed token by the same delta from wherever it currently is, then clamps to the boundary if needed. **Clamp** mode only pulls the token if the handler left it outside the radius.
+- Leashes can chain (A leashed to B leashed to C); moving C pulls both.
+- Only one client does the pulling: the active GM, or the person who moved the handler if no GM is connected.
 - Visual rings are PIXI graphics drawn around the handler.
+- Debugging: run `colysLeashDebug = true` in the browser console to log every pull.
 
 ## License
 MIT

@@ -17,13 +17,16 @@ What to look for in the code
 - Settings registration inside `Hooks.once('init', ...)` — keys: `defaultDistance`, `exceedBehavior`, `gmOnly`, `ringVisibility`, `handlerPullMode`.
 - Two-step movement logic:
   - `preUpdateToken` enforces/block-or-clamp movement when a leashed token is moved.
-  - `updateToken` handles handler movement sessions and applies delta movement to lessees (with defensive `_internalUpdating` to avoid loops).
+  - `updateToken` computes the handler's delta from `_lastPos` (last known position of every token), then queues a pull (`runPull`) that moves each follower by that delta from its *current* position and clamps to the radius. Pulls are serialized through `_pullQueue`. There is intentionally no per-move session state or timers.
 - Ring visuals: `showRingForPair`, `updateRingPosition`, `removeRingForPair` manipulate `PIXI.Graphics` attached to `canvas.primary`.
 
 Project-specific conventions and gotchas
 - Single-file runtime: changes to `scripts/leash.js` are global; be careful to keep initialization guards (`__colys_inited`, `__colys_hooks_registered`).
 - Use of flags: all leash state is stored on token documents via `setFlag`/`getFlag` scoped to `MODULE_ID`. Do not invent a parallel storage.
-- Avoid infinite update loops: the module uses `_internalUpdating` Set to mark programmatic updates. If you modify movement logic, preserve or extend this mechanism.
+- Avoid infinite update loops: pull updates carry `{ internal: true, visited: [...] }` in the update options (mirrored in the `_internal` map in case options are dropped). `visited` stops mutual leashes from ping-ponging. If you modify movement logic, preserve this mechanism.
+- Only one client pulls (active GM, else the mover). Rings are updated on every client.
+- Use `scene.dimensions` rather than `canvas.dimensions` so non-viewed scenes work.
+- Foundry v13+ passes HTMLElement (not jQuery) to `renderTokenHUD`, and legacy `Dialog` is deprecated; the module uses `DialogV2` and plain DOM.
 - Movement flow split: `preUpdateToken` may cancel or mutate the pending update (return `false` to block). `updateToken` applies subsequent embedded-document updates — keep changes coherent across both hooks.
 - Behavior keys: changing `exceedBehavior` or `handlerPullMode` requires touching both the pre-update clamp and the handler-pull code paths.
 
@@ -34,7 +37,7 @@ Integration points and external API
 Developer workflows
 - No build step — edit `scripts/leash.js` and reload Foundry (or restart the client) to see changes.
 - To test behavior: enable module in Foundry, open a scene with at least two tokens, use Token HUD → Leash, then move handler and target tokens to verify clamps/drag.
-- Debugging: use the Foundry client console (Electron devtools). The module logs with `${MODULE_ID} | ...` prefixes (search for `colys-leash |` in console).
+- Debugging: use the Foundry client console (Electron devtools). The module logs with `${MODULE_ID} | ...` prefixes (search for `colys-leash |` in console). Set `colysLeashDebug = true` for per-move logging.
 
 Examples from code
 - Flag set example:
@@ -53,7 +56,7 @@ if (_internalUpdating.has(tokenDoc.id)) return; // skip programmatic updates
 When modifying behavior
 - If you add new settings affecting movement, update both `preUpdateToken` (for blocking/clamping) and the `updateToken` handler-pull logic.
 - If you change the flag schema, update `getLeashFlag`, `setLeashFlag`, and every place that reads the flag (search for `.getFlag(${MODULE_ID}, 'leash')`).
-- Update ring management whenever token ids or scene ids change; `canvasReady` / `deleteToken` cleanup must remain intact.
+- Update ring management whenever token ids or scene ids change; `canvasReady` / `createToken` / `deleteToken` cleanup (which also maintains `_lastPos`) must remain intact.
 
 If something is unclear
 - Tell me which area you want expanded (movement logic, flags, ring visuals, or testing instructions) and I will iterate.
